@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Borehole Siting Predictor</string>
+    <string name="title_activity_main">Borehole Siting Predictor</string>
+    <string name="package_name">com.awoja.borehole</string>
+    <string name="custom_url_scheme">com.awoja.borehole</string>
+</resources>
