@@ -33,18 +33,47 @@ export type PredictResponse = {
   bundle_version: string
 }
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
+function resolveApiBaseUrl() {
+  const envBase = String(import.meta.env.VITE_API_BASE_URL || '').trim()
+  if (envBase) return envBase.replace(/\/$/, '')
+  if (typeof window !== 'undefined') {
+    const { protocol, hostname, port } = window.location
+    if (protocol === 'capacitor:' || protocol === 'ionic:') {
+      // Capacitor Android emulator uses 10.0.2.2 to reach host machine localhost.
+      return 'http://10.0.2.2:8000'
+    }
+    if (protocol === 'tauri:' || protocol === 'file:') {
+      // Desktop packages and local file loads should use the desktop host's localhost.
+      return 'http://localhost:8000'
+    }
+    if (hostname === 'localhost' || hostname === '127.0.0.1') {
+      return 'http://localhost:8000'
+    }
+    return `${protocol}//${hostname}${port ? `:${port}` : ''}`
+  }
+  return 'http://localhost:8000'
+}
+
+const API_BASE_URL = resolveApiBaseUrl()
+const API_URL = `${API_BASE_URL}/predict`
 
 export async function predict(req: PredictRequest): Promise<PredictResponse> {
-  const res = await fetch(`${API_BASE_URL}/predict`, {
+  try {
+    const res = await fetch(API_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(req),
   })
-  if (!res.ok) {
-    const txt = await res.text().catch(() => '')
-    throw new Error(txt || `Prediction failed (${res.status})`)
+    if (!res.ok) {
+      const txt = await res.text().catch(() => '')
+      throw new Error(txt || `Prediction failed (${res.status})`)
+    }
+    return res.json()
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    throw new Error(
+      `Unable to reach the prediction service at ${API_URL}. Please make sure the backend is running and the API base URL is correct. (${message})`,
+    )
   }
-  return res.json()
 }
 

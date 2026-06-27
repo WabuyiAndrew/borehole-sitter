@@ -12,7 +12,7 @@ export default defineConfig({
       manifest: {
         name: 'DrillScout',
         short_name: 'DrillScout',
-        description: 'DrillScout borehole siting demo with OpenStreetMap and satellite preview.',
+        description: 'Predict the best borehole siting location from coordinates or your current GPS position.',
         theme_color: '#09111f',
         background_color: '#09111f',
         display: 'standalone',

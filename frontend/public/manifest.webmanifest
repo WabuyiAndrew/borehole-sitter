@@ -1,7 +1,7 @@
 {
-    "name": "BoreHole Sitter",
-    "short_name": "BoreHole",
-    "description": "Predict borehole siting suitability from UTME/UTMN (UTM Zone 36N) or GPS.",
+    "name": "DrillScout",
+    "short_name": "DrillScout",
+    "description": "Predict the best borehole siting location from coordinates or your current GPS position.",
     "start_url": "/",
     "scope": "/",
     "display": "standalone",

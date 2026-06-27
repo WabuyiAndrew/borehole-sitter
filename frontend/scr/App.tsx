@@ -2,60 +2,50 @@ import './App.css'
 import { useMemo, useState } from 'react'
 import { predict, type PredictResult } from './api'
 import { MapPreview } from './components/MapPreview'
-import { Charts } from './components/Charts'
 
 function App() {
   const [utme, setUtme] = useState('520000')
   const [utmn, setUtmn] = useState('180000')
-  const [batchPairs, setBatchPairs] = useState('')
 
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [results, setResults] = useState<PredictResult[] | null>(null)
-  const [status, setStatus] = useState<'idle' | 'online' | 'offline'>('idle')
+  const [status, setStatus] = useState<'ready' | 'connected' | 'error'>('ready')
 
   const best = useMemo(() => (results && results.length ? results[0] : null), [results])
 
   const manualUtme = Number(utme)
   const manualUtmn = Number(utmn)
   const hasValidManual = Number.isFinite(manualUtme) && Number.isFinite(manualUtmn)
-  const canPredict = loading ? false : !!batchPairs.trim() || hasValidManual
+  const canPredict = !loading && hasValidManual
 
   const decisionClass =
     best?.decision === 'Suitable' ? 'good' : best?.decision === 'Moderate' ? 'warn' : best ? 'bad' : 'muted'
+
+  function formatRuntimeError(err: unknown) {
+    if (err instanceof Error) return err.message
+    if (typeof err === 'string') return err
+    if (typeof err === 'object' && err !== null) {
+      const maybe = err as Record<string, unknown>
+      if (typeof maybe.message === 'string') return maybe.message
+      if ('code' in maybe) return `Error ${String(maybe.code)}: ${String(maybe.message ?? 'Location not available')}`
+    }
+    return String(err)
+  }
 
   async function onPredictManual() {
     setError(null)
     setLoading(true)
     try {
-      if (batchPairs.trim()) {
-        const points = batchPairs
-          .split('\n')
-          .map((l) => l.trim())
-          .filter(Boolean)
-          .map((l) => {
-            const parts = l.split(/[,\s]+/).filter(Boolean)
-            if (parts.length < 2) throw new Error(`Invalid line: "${l}". Use "UTME,UTMN"`)
-            const e = Number(parts[0])
-            const n = Number(parts[1])
-            if (!Number.isFinite(e) || !Number.isFinite(n)) throw new Error(`Invalid numbers in line: "${l}"`)
-            return { utme: e, utmn: n }
-          })
-
-        const resp = await predict({ source: 'manual', points_utm: points })
-        setResults(resp.results)
-        return
-      }
-
       const e = Number(utme)
       const n = Number(utmn)
       if (!Number.isFinite(e) || !Number.isFinite(n)) throw new Error('Please enter valid numeric UTME and UTMN.')
       const resp = await predict({ source: 'manual', point_utm: { utme: e, utmn: n } })
       setResults(resp.results)
-      setStatus('online')
+      setStatus('connected')
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
-      setStatus('offline')
+      setError(formatRuntimeError(err))
+      setStatus('error')
     } finally {
       setLoading(false)
     }
@@ -65,6 +55,9 @@ function App() {
     setError(null)
     setLoading(true)
     try {
+      if (!navigator.geolocation) {
+        throw new Error('Geolocation is unavailable in this browser or app environment.')
+      }
       const pos = await new Promise<GeolocationPosition>((resolve, reject) => {
         navigator.geolocation.getCurrentPosition(resolve, reject, { enableHighAccuracy: true, timeout: 15000 })
       })
@@ -75,10 +68,10 @@ function App() {
       setResults(resp.results)
       setUtme(String(Math.round(resp.best.utme)))
       setUtmn(String(Math.round(resp.best.utmn)))
-      setStatus('online')
+      setStatus('connected')
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
-      setStatus('offline')
+      setError(formatRuntimeError(err))
+      setStatus('error')
     } finally {
       setLoading(false)
     }
@@ -90,15 +83,15 @@ function App() {
         <div className="heroTop">
           <div>
             <div className="title">DrillScout</div>
-            <div className="subtitle">UTM Zone 36N · OpenStreetMap + satellite preview · Demo borehole siting</div>
+            <div className="subtitle">Predict the best borehole siting location from coordinates or your current position.</div>
           </div>
-          <div className={`status ${status}`}>{status === 'idle' ? 'Ready' : status === 'online' ? 'Online' : 'Offline'}</div>
+          <div className={`status ${status}`}>{status === 'ready' ? 'Ready' : status === 'connected' ? 'Connected' : 'Error'}</div>
         </div>
       </header>
 
       <main className="grid">
         <section className="card">
-          <h2>Inputs</h2>
+          <h2>Coordinates</h2>
 
           <div className="row">
             <label>
@@ -119,20 +112,6 @@ function App() {
               {loading ? 'Predicting…' : 'Predict suitability'}
             </button>
           </div>
-
-          <details className="details">
-            <summary>Batch mode (for charts)</summary>
-            <div className="hint">
-              Paste multiple lines in the format <code>UTME,UTMN</code> (one point per line). When you run prediction,
-              the app will rank the points and show charts.
-            </div>
-            <textarea
-              value={batchPairs}
-              onChange={(e) => setBatchPairs(e.target.value)}
-              placeholder={'520000,180000\n520250,180250\n520500,180500'}
-              rows={6}
-            />
-          </details>
 
           {error ? <div className="error">{error}</div> : null}
         </section>
@@ -163,14 +142,6 @@ function App() {
           )}
         </section>
 
-        <section className="card wide">
-          <h2>Charts</h2>
-          {results && results.length > 1 ? (
-            <Charts results={results} />
-          ) : (
-            <div className="muted">Charts appear automatically when you run batch mode (2+ points).</div>
-          )}
-        </section>
       </main>
     </div>
   )
