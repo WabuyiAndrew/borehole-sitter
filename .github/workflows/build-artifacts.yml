@@ -19,13 +19,26 @@ jobs:
         with:
           distribution: temurin
           java-version: 17
-      - uses: android-actions/setup-android@v2
-        with:
-          api-level: 33
-          components: |
-            platform-tools
-            build-tools;33.0.2
-            platform;android-33
+      - name: Install Android SDK commandline tools
+        run: |
+          set -e
+          sudo apt-get update
+          sudo apt-get install -y wget unzip
+          ANDROID_SDK_ROOT=/usr/local/android-sdk
+          mkdir -p ${ANDROID_SDK_ROOT}/cmdline-tools
+          cd /tmp
+          wget -q https://dl.google.com/android/repository/commandlinetools-linux-9477386_latest.zip -O cmdline.zip
+          unzip -q cmdline.zip -d ${ANDROID_SDK_ROOT}/cmdline-tools
+          # some packages extract into cmdline-tools/cmdline-tools
+          if [ -d "${ANDROID_SDK_ROOT}/cmdline-tools/cmdline-tools" ]; then
+            mv ${ANDROID_SDK_ROOT}/cmdline-tools/cmdline-tools ${ANDROID_SDK_ROOT}/cmdline-tools/latest
+          else
+            mv ${ANDROID_SDK_ROOT}/cmdline-tools ${ANDROID_SDK_ROOT}/cmdline-tools/latest || true
+          fi
+          export PATH=${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin:${ANDROID_SDK_ROOT}/platform-tools:$PATH
+          yes | ${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager --sdk_root=${ANDROID_SDK_ROOT} --licenses
+          ${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager --sdk_root=${ANDROID_SDK_ROOT} "platform-tools" "platforms;android-33" "build-tools;33.0.2"
+        shell: bash
       - name: Install dependencies
         working-directory: frontend
         run: npm ci
