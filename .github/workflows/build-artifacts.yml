@@ -51,6 +51,9 @@ jobs:
       - name: Sync Capacitor Android
         working-directory: frontend
         run: npx cap sync android
+      - name: Make gradlew executable
+        working-directory: frontend/android
+        run: chmod +x ./gradlew
       - name: Build debug APK
         working-directory: frontend/android
         run: ./gradlew assembleDebug
