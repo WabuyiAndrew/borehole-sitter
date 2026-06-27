@@ -12,36 +12,42 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+      
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: 21
+      
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
-        with:
-          api-level: 33
-          build-tools: 33.0.2
-      - name: Install dependencies
+      
+      - name: Install frontend dependencies
         working-directory: frontend
         run: npm ci
+      
       - name: Build web app
         working-directory: frontend
         env:
-          VITE_API_BASE_URL: ${{ secrets.VITE_API_BASE_URL || 'http://localhost:8000' }}
-          VITE_MAPTILER_KEY: ${{ secrets.VITE_MAPTILER_KEY || '' }}
+          VITE_API_BASE_URL: https://borehole-sitter.onrender.com
+          VITE_MAPTILER_KEY: ''
         run: npm run build
+      
       - name: Sync Capacitor Android
         working-directory: frontend
         run: npx cap sync android
+      
       - name: Make gradlew executable
         working-directory: frontend/android
         run: chmod +x ./gradlew
+      
       - name: Build debug APK
         working-directory: frontend/android
         run: ./gradlew assembleDebug
+      
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
@@ -53,29 +59,36 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+      
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+      
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: 21
+      
       - uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
           override: true
-      - name: Install dependencies
+      
+      - name: Install frontend dependencies
         working-directory: frontend
         run: npm ci
+      
       - name: Build web app
         working-directory: frontend
         env:
-          VITE_API_BASE_URL: ${{ secrets.VITE_API_BASE_URL || 'http://localhost:8000' }}
-          VITE_MAPTILER_KEY: ${{ secrets.VITE_MAPTILER_KEY || '' }}
+          VITE_API_BASE_URL: https://borehole-sitter.onrender.com
+          VITE_MAPTILER_KEY: ''
         run: npm run build
+      
       - name: Build Tauri bundle
         working-directory: frontend
         run: npm run tauri:build
+      
       - name: Upload Windows bundle artifact
         uses: actions/upload-artifact@v4
         with:

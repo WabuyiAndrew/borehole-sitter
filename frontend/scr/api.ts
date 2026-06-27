@@ -33,25 +33,22 @@ export type PredictResponse = {
   bundle_version: string
 }
 
+const DEFAULT_BACKEND_URL = 'https://borehole-sitter.onrender.com'
+
 function resolveApiBaseUrl() {
   const envBase = String(import.meta.env.VITE_API_BASE_URL || '').trim()
   if (envBase) return envBase.replace(/\/$/, '')
   if (typeof window !== 'undefined') {
-    const { protocol, hostname, port } = window.location
+    const { protocol, hostname } = window.location
     if (protocol === 'capacitor:' || protocol === 'ionic:') {
-      // Capacitor Android emulator uses 10.0.2.2 to reach host machine localhost.
       return 'http://10.0.2.2:8000'
     }
-    if (protocol === 'tauri:' || protocol === 'file:') {
-      // Desktop packages and local file loads should use the desktop host's localhost.
+    if (hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1') {
       return 'http://localhost:8000'
     }
-    if (hostname === 'localhost' || hostname === '127.0.0.1') {
-      return 'http://localhost:8000'
-    }
-    return `${protocol}//${hostname}${port ? `:${port}` : ''}`
+    return DEFAULT_BACKEND_URL
   }
-  return 'http://localhost:8000'
+  return DEFAULT_BACKEND_URL
 }
 
 const API_BASE_URL = resolveApiBaseUrl()
@@ -60,10 +57,10 @@ const API_URL = `${API_BASE_URL}/predict`
 export async function predict(req: PredictRequest): Promise<PredictResponse> {
   try {
     const res = await fetch(API_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(req),
-  })
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(req),
+    })
     if (!res.ok) {
       const txt = await res.text().catch(() => '')
       throw new Error(txt || `Prediction failed (${res.status})`)
