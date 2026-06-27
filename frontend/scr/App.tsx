@@ -16,6 +16,11 @@ function App() {
 
   const best = useMemo(() => (results && results.length ? results[0] : null), [results])
 
+  const manualUtme = Number(utme)
+  const manualUtmn = Number(utmn)
+  const hasValidManual = Number.isFinite(manualUtme) && Number.isFinite(manualUtmn)
+  const canPredict = loading ? false : !!batchPairs.trim() || hasValidManual
+
   const decisionClass =
     best?.decision === 'Suitable' ? 'good' : best?.decision === 'Moderate' ? 'warn' : best ? 'bad' : 'muted'
 
@@ -84,8 +89,8 @@ function App() {
       <header className="hero">
         <div className="heroTop">
           <div>
-            <div className="title">BoreHole Sitter</div>
-            <div className="subtitle">UTM Zone 36N · MapTiler Satellite · Trained model predictions</div>
+            <div className="title">DrillScout</div>
+            <div className="subtitle">UTM Zone 36N · OpenStreetMap + satellite preview · Demo borehole siting</div>
           </div>
           <div className={`status ${status}`}>{status === 'idle' ? 'Ready' : status === 'online' ? 'Online' : 'Offline'}</div>
         </div>
@@ -110,7 +115,7 @@ function App() {
             <button className="btn" onClick={onUseMyLocation} disabled={loading}>
               Use my location
             </button>
-            <button className="btn primary" onClick={onPredictManual} disabled={loading}>
+            <button className="btn primary" onClick={onPredictManual} disabled={!canPredict}>
               {loading ? 'Predicting…' : 'Predict suitability'}
             </button>
           </div>
