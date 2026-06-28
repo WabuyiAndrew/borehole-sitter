@@ -37,6 +37,30 @@ export type PredictResponse = {
   bundle_version: string
 }
 
+export type CoordinateReference = {
+  utme: number
+  utmn: number
+  longitude: number
+  latitude: number
+  zone: number
+  northern: boolean
+  epsg: number
+}
+
+export type ConvertCoordinatesRequest =
+  | {
+      point_geo: { longitude: number; latitude: number }
+    }
+  | {
+      point_utm: { utme: number; utmn: number; zone?: number; northern?: boolean }
+    }
+
+export type ConvertCoordinatesResponse = {
+  input_mode: 'geo' | 'utm'
+  authoritative: CoordinateReference
+  model: CoordinateReference
+}
+
 const DEFAULT_BACKEND_URL = 'https://borehole-sitter.onrender.com'
 
 function resolveApiBaseUrl() {
@@ -58,6 +82,7 @@ function resolveApiBaseUrl() {
 const API_BASE_URL = resolveApiBaseUrl()
 const PREDICT_URL = `${API_BASE_URL}/predict`
 const HEALTH_URL = `${API_BASE_URL}/health`
+const CONVERT_COORDINATES_URL = `${API_BASE_URL}/convert-coordinates`
 
 async function readErrorMessage(res: Response) {
   const contentType = res.headers.get('content-type') || ''
@@ -71,9 +96,11 @@ async function readErrorMessage(res: Response) {
   return text.trim() || `Request failed with status ${res.status}`
 }
 
-async function fetchJson<T>(url: string, init: RequestInit, timeoutMs: number): Promise<T> {
+async function fetchJson<T>(url: string, init: RequestInit, timeoutMs: number, signal?: AbortSignal): Promise<T> {
   const controller = new AbortController()
   const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs)
+  const abortFromCaller = () => controller.abort()
+  signal?.addEventListener('abort', abortFromCaller)
 
   try {
     const res = await fetch(url, {
@@ -102,6 +129,7 @@ async function fetchJson<T>(url: string, init: RequestInit, timeoutMs: number): 
     throw err
   } finally {
     window.clearTimeout(timeoutId)
+    signal?.removeEventListener('abort', abortFromCaller)
   }
 }
 
@@ -127,5 +155,21 @@ export async function predict(req: PredictRequest): Promise<PredictResponse> {
       body: JSON.stringify(req),
     },
     60000,
+  )
+}
+
+export async function convertCoordinates(
+  req: ConvertCoordinatesRequest,
+  signal?: AbortSignal,
+): Promise<ConvertCoordinatesResponse> {
+  return fetchJson<ConvertCoordinatesResponse>(
+    CONVERT_COORDINATES_URL,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(req),
+    },
+    20000,
+    signal,
   )
 }

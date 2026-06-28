@@ -7,7 +7,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-from .model_runtime import AwojaModelRuntime
+from .model_runtime import AwojaModelRuntime, MODEL_UTM_NORTHERN, MODEL_UTM_ZONE
 
 
 MODEL_PATH = os.getenv("MODEL_PATH", os.path.join(os.path.dirname(__file__), "..", "models", "awoja_deployment_bundle.joblib"))
@@ -68,6 +68,13 @@ class PointGeo(BaseModel):
     latitude: float = Field(..., description="Latitude in degrees (EPSG:4326)")
 
 
+class ConvertPointUTM(BaseModel):
+    utme: float = Field(..., description="Easting (meters) in the supplied UTM zone/hemisphere")
+    utmn: float = Field(..., description="Northing (meters) in the supplied UTM zone/hemisphere")
+    zone: int = Field(default=MODEL_UTM_ZONE, ge=1, le=60, description="UTM zone number (1-60)")
+    northern: bool = Field(default=MODEL_UTM_NORTHERN, description="True for northern hemisphere, false for southern hemisphere")
+
+
 class PredictRequest(BaseModel):
     source: Literal["manual", "geolocation"] = "manual"
     point_utm: Optional[PointUTM] = None
@@ -85,6 +92,27 @@ class PredictResponse(BaseModel):
     results: List[Dict[str, Any]]
     warnings: List[str] = []
     bundle_version: str
+
+
+class CoordinateReference(BaseModel):
+    utme: float
+    utmn: float
+    longitude: float
+    latitude: float
+    zone: int
+    northern: bool
+    epsg: int
+
+
+class ConvertCoordinatesRequest(BaseModel):
+    point_geo: Optional[PointGeo] = None
+    point_utm: Optional[ConvertPointUTM] = None
+
+
+class ConvertCoordinatesResponse(BaseModel):
+    input_mode: Literal["geo", "utm"]
+    authoritative: CoordinateReference
+    model: CoordinateReference
 
 
 @app.on_event("startup")
@@ -115,6 +143,30 @@ def model_info() -> Dict[str, Any]:
         "categorical_features_count": len(info.cat_feats),
         "units": {"utme": "m", "utmn": "m", "predicted_yield_m3h": "m³/h", "predicted_static_water_level_m": "m", "gpi": "0-100"},
     }
+
+
+@app.post("/convert-coordinates", response_model=ConvertCoordinatesResponse)
+def convert_coordinates(req: ConvertCoordinatesRequest) -> ConvertCoordinatesResponse:
+    if runtime is None:
+        raise HTTPException(status_code=503, detail="Model not loaded")
+
+    has_geo = req.point_geo is not None
+    has_utm = req.point_utm is not None
+    if has_geo == has_utm:
+        raise HTTPException(status_code=400, detail="Provide exactly one of point_geo or point_utm")
+
+    if req.point_geo is not None:
+        converted = runtime.convert_from_geo(req.point_geo.longitude, req.point_geo.latitude)
+        return ConvertCoordinatesResponse(input_mode="geo", **converted)
+
+    assert req.point_utm is not None
+    converted = runtime.convert_from_utm(
+        req.point_utm.utme,
+        req.point_utm.utmn,
+        zone=req.point_utm.zone,
+        northern=req.point_utm.northern,
+    )
+    return ConvertCoordinatesResponse(input_mode="utm", **converted)
 
 
 @app.post("/predict", response_model=PredictResponse)

@@ -1,6 +1,14 @@
 import './App.css'
 import { useEffect, useMemo, useState } from 'react'
-import { getApiBaseUrl, predict, type PredictResult, warmBackend } from './api'
+import {
+  convertCoordinates,
+  getApiBaseUrl,
+  predict,
+  type ConvertCoordinatesRequest,
+  type ConvertCoordinatesResponse,
+  type PredictResult,
+  warmBackend,
+} from './api'
 import { Charts } from './components/Charts'
 import { MapPreview } from './components/MapPreview'
 
@@ -21,12 +29,29 @@ type PlaceLookup = {
   fullLabel: string
 }
 
-type ManualPointDraft = {
-  source: CoordinateMode
-  utme: number
-  utmn: number
-  latitude: number
-  longitude: number
+type ManualCoordinateDraft = {
+  request: ConvertCoordinatesRequest | null
+  error: string | null
+  key: string | null
+}
+
+type FilePickerWritable = {
+  write: (data: Blob) => Promise<void>
+  close: () => Promise<void>
+}
+
+type FilePickerHandle = {
+  createWritable: () => Promise<FilePickerWritable>
+}
+
+type WindowWithFilePicker = Window & {
+  showSaveFilePicker?: (options: {
+    suggestedName: string
+    types?: Array<{
+      description: string
+      accept: Record<string, string[]>
+    }>
+  }) => Promise<FilePickerHandle>
 }
 
 const DEFAULT_LOCATION: LatLng = {
@@ -35,105 +60,6 @@ const DEFAULT_LOCATION: LatLng = {
 }
 
 const DEFAULT_BATCH_INPUT = ['520000,180000', '520250,180250', '520500,180500'].join('\n')
-
-const WGS84_A = 6378137.0
-const WGS84_ECCSQ = 0.006694379990141316
-const K0 = 0.9996
-
-function degToRad(value: number) {
-  return (value * Math.PI) / 180
-}
-
-function radToDeg(value: number) {
-  return (value * 180) / Math.PI
-}
-
-function latLonToUtm(latitude: number, longitude: number, zone = 36) {
-  const latRad = degToRad(latitude)
-  const lonRad = degToRad(longitude)
-  const lonOrigin = degToRad(zone * 6 - 183)
-
-  const eccPrimeSq = WGS84_ECCSQ / (1 - WGS84_ECCSQ)
-  const N = WGS84_A / Math.sqrt(1 - WGS84_ECCSQ * Math.sin(latRad) ** 2)
-  const T = Math.tan(latRad) ** 2
-  const C = eccPrimeSq * Math.cos(latRad) ** 2
-  const A = Math.cos(latRad) * (lonRad - lonOrigin)
-
-  const M =
-    WGS84_A *
-    ((1 - WGS84_ECCSQ / 4 - (3 * WGS84_ECCSQ ** 2) / 64 - (5 * WGS84_ECCSQ ** 3) / 256) * latRad -
-      ((3 * WGS84_ECCSQ) / 8 + (3 * WGS84_ECCSQ ** 2) / 32 + (45 * WGS84_ECCSQ ** 3) / 1024) * Math.sin(2 * latRad) +
-      ((15 * WGS84_ECCSQ ** 2) / 256 + (45 * WGS84_ECCSQ ** 3) / 1024) * Math.sin(4 * latRad) -
-      ((35 * WGS84_ECCSQ ** 3) / 3072) * Math.sin(6 * latRad))
-
-  const utme =
-    K0 * N *
-      (A +
-        ((1 - T + C) * A ** 3) / 6 +
-        ((5 - 18 * T + T ** 2 + 72 * C - 58 * eccPrimeSq) * A ** 5) / 120) +
-    500000
-
-  const utmn =
-    K0 *
-      (M +
-        N * Math.tan(latRad) *
-          ((A ** 2) / 2 +
-            ((5 - T + 9 * C + 4 * C ** 2) * A ** 4) / 24 +
-            ((61 - 58 * T + T ** 2 + 600 * C - 330 * eccPrimeSq) * A ** 6) / 720))
-
-  return { utme, utmn }
-}
-
-function utmToLatLon(utme: number, utmn: number, zone = 36, northern = true): LatLng {
-  let x = utme - 500000
-  let y = utmn
-  if (!northern) y -= 10000000
-
-  const eccPrimeSq = WGS84_ECCSQ / (1 - WGS84_ECCSQ)
-  const M = y / K0
-  const mu =
-    M /
-    (WGS84_A *
-      (1 - WGS84_ECCSQ / 4 - (3 * WGS84_ECCSQ ** 2) / 64 - (5 * WGS84_ECCSQ ** 3) / 256))
-
-  const e1 = (1 - Math.sqrt(1 - WGS84_ECCSQ)) / (1 + Math.sqrt(1 - WGS84_ECCSQ))
-  const J1 = (3 * e1) / 2 - (27 * e1 ** 3) / 32
-  const J2 = (21 * e1 ** 2) / 16 - (55 * e1 ** 4) / 32
-  const J3 = (151 * e1 ** 3) / 96
-  const J4 = (1097 * e1 ** 4) / 512
-
-  const fp =
-    mu +
-    J1 * Math.sin(2 * mu) +
-    J2 * Math.sin(4 * mu) +
-    J3 * Math.sin(6 * mu) +
-    J4 * Math.sin(8 * mu)
-
-  const sinFp = Math.sin(fp)
-  const cosFp = Math.cos(fp)
-  const tanFp = Math.tan(fp)
-
-  const C1 = eccPrimeSq * cosFp ** 2
-  const T1 = tanFp ** 2
-  const R1 = (WGS84_A * (1 - WGS84_ECCSQ)) / ((1 - WGS84_ECCSQ * sinFp ** 2) ** 1.5)
-  const N1 = WGS84_A / Math.sqrt(1 - WGS84_ECCSQ * sinFp ** 2)
-  const D = x / (N1 * K0)
-
-  const lat =
-    fp -
-    (N1 * tanFp / R1) *
-      ((D ** 2) / 2 -
-        ((5 + 3 * T1 + 10 * C1 - 4 * C1 ** 2 - 9 * eccPrimeSq) * D ** 4) / 24 +
-        ((61 + 90 * T1 + 298 * C1 + 45 * T1 ** 2 - 252 * eccPrimeSq - 3 * C1 ** 2) * D ** 6) / 720)
-
-  const lonOrigin = degToRad(zone * 6 - 183)
-  const lon =
-    lonOrigin +
-    (D - ((1 + 2 * T1 + C1) * D ** 3) / 6 + ((5 - 2 * C1 + 28 * T1 - 3 * C1 ** 2 + 8 * eccPrimeSq + 24 * T1 ** 2) * D ** 5) / 120) /
-      cosFp
-
-  return { latitude: radToDeg(lat), longitude: radToDeg(lon) }
-}
 
 function parseBatchInput(value: string): BatchPoint[] {
   const lines = value
@@ -174,67 +100,81 @@ function isValidLongitude(value: number) {
   return value >= -180 && value <= 180
 }
 
-function deriveManualPoint(
+function isValidUtme(value: number) {
+  return value >= 100000 && value <= 900000
+}
+
+function isValidUtmn(value: number) {
+  return value >= 0 && value <= 10000000
+}
+
+function deriveManualCoordinateRequest(
   coordinateMode: CoordinateMode,
   utme: string,
   utmn: string,
   latitudeInput: string,
   longitudeInput: string,
-): { point: ManualPointDraft | null; error: string | null } {
+): ManualCoordinateDraft {
   if (coordinateMode === 'latlon') {
     if (!hasValue(latitudeInput) || !hasValue(longitudeInput)) {
-      return { point: null, error: 'Enter both latitude and longitude.' }
+      return { request: null, error: 'Enter both latitude and longitude.', key: null }
     }
 
     const latitude = Number(latitudeInput)
     const longitude = Number(longitudeInput)
 
     if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
-      return { point: null, error: 'Please enter valid numeric latitude and longitude values.' }
+      return { request: null, error: 'Please enter valid numeric latitude and longitude values.', key: null }
     }
 
     if (!isValidLatitude(latitude)) {
-      return { point: null, error: 'Latitude must be between -90 and 90.' }
+      return { request: null, error: 'Latitude must be between -90 and 90.', key: null }
     }
 
     if (!isValidLongitude(longitude)) {
-      return { point: null, error: 'Longitude must be between -180 and 180.' }
+      return { request: null, error: 'Longitude must be between -180 and 180.', key: null }
     }
 
-    const pointUtm = latLonToUtm(latitude, longitude)
     return {
-      point: {
-        source: 'latlon',
-        latitude,
-        longitude,
-        utme: pointUtm.utme,
-        utmn: pointUtm.utmn,
+      request: {
+        point_geo: {
+          latitude,
+          longitude,
+        },
       },
       error: null,
+      key: `geo:${latitude}:${longitude}`,
     }
   }
 
   if (!hasValue(utme) || !hasValue(utmn)) {
-    return { point: null, error: 'Enter both UTME and UTMN.' }
+    return { request: null, error: 'Enter both UTME and UTMN.', key: null }
   }
 
   const parsedUtme = Number(utme)
   const parsedUtmn = Number(utmn)
 
   if (!Number.isFinite(parsedUtme) || !Number.isFinite(parsedUtmn)) {
-    return { point: null, error: 'Please enter valid numeric UTME and UTMN values.' }
+    return { request: null, error: 'Please enter valid numeric UTME and UTMN values.', key: null }
   }
 
-  const pointGeo = utmToLatLon(parsedUtme, parsedUtmn)
+  if (!isValidUtme(parsedUtme)) {
+    return { request: null, error: 'UTME must be between 100000 and 900000 meters.', key: null }
+  }
+
+  if (!isValidUtmn(parsedUtmn)) {
+    return { request: null, error: 'UTMN must be between 0 and 10000000 meters.', key: null }
+  }
+
   return {
-    point: {
-      source: 'utm',
-      utme: parsedUtme,
-      utmn: parsedUtmn,
-      latitude: pointGeo.latitude,
-      longitude: pointGeo.longitude,
+    request: {
+      point_utm: {
+        utme: parsedUtme,
+        utmn: parsedUtmn,
+      },
     },
     error: null,
+    key: `utm:${parsedUtme}:${parsedUtmn}`,
   }
 }
 
@@ -296,13 +236,50 @@ function escapeCsvValue(value: string | number) {
   return text
 }
 
-function downloadFile(filename: string, content: string, mimeType: string) {
+async function saveTextFile(filename: string, content: string, mimeType: string) {
   const blob = new Blob([content], { type: mimeType })
+  const file = new File([blob], filename, { type: mimeType })
+  const pickerWindow = window as WindowWithFilePicker
+  const extension = filename.includes('.') ? `.${filename.split('.').pop() || 'txt'}` : '.txt'
+  const acceptMimeType = mimeType.split(';')[0] || 'text/plain'
+
+  if (typeof pickerWindow.showSaveFilePicker === 'function') {
+    const handle = await pickerWindow.showSaveFilePicker({
+      suggestedName: filename,
+      types: [
+        {
+          description: 'Exported file',
+          accept: {
+            [acceptMimeType]: [extension],
+          },
+        },
+      ],
+    })
+    const writable = await handle.createWritable()
+    await writable.write(blob)
+    await writable.close()
+    return
+  }
+
+  const shareData: ShareData = {
+    files: [file],
+    title: filename,
+  }
+  const shareNavigator = navigator as Navigator & {
+    canShare?: (data?: ShareData) => boolean
+  }
+
+  if (typeof navigator.share === 'function' && typeof shareNavigator.canShare === 'function' && shareNavigator.canShare(shareData)) {
+    await navigator.share(shareData)
+    return
+  }
+
   const href = URL.createObjectURL(blob)
   const link = document.createElement('a')
   link.href = href
   link.download = filename
   link.rel = 'noopener'
+  link.target = '_blank'
   document.body.appendChild(link)
   link.click()
   document.body.removeChild(link)
@@ -320,99 +297,13 @@ function App() {
   const [error, setError] = useState<string | null>(null)
   const [results, setResults] = useState<PredictResult[] | null>(null)
   const [status, setStatus] = useState<'ready' | 'warming' | 'connected' | 'error'>('warming')
-  const [selectedPoint, setSelectedPoint] = useState<LatLng | null>(null)
+  const [conversion, setConversion] = useState<ConvertCoordinatesResponse | null>(null)
+  const [converting, setConverting] = useState(false)
+  const [conversionError, setConversionError] = useState<string | null>(null)
   const [locationSummary, setLocationSummary] = useState<string | null>(null)
   const [placeName, setPlaceName] = useState<string | null>(null)
   const [placeDetails, setPlaceDetails] = useState<string | null>(null)
   const [lookingUpPlace, setLookingUpPlace] = useState(false)
-
-  const best = useMemo(() => (results && results.length ? results[0] : null), [results])
-  const manualDraft = useMemo(
-    () => deriveManualPoint(coordinateMode, utme, utmn, latitudeInput, longitudeInput),
-    [coordinateMode, utme, utmn, latitudeInput, longitudeInput],
-  )
-  const canPredict = !loading && !!manualDraft.point && !manualDraft.error
-
-  const decisionClass =
-    best?.decision === 'Suitable' ? 'good' : best?.decision === 'Moderate' ? 'warn' : best ? 'bad' : 'muted'
-
-  const mapCenter = useMemo(() => {
-    if (selectedPoint) return selectedPoint
-    if (manualDraft.point) {
-      return {
-        latitude: manualDraft.point.latitude,
-        longitude: manualDraft.point.longitude,
-      }
-    }
-    return DEFAULT_LOCATION
-  }, [selectedPoint, manualDraft])
-  const batchDraft = useMemo(() => {
-    try {
-      const points = parseBatchInput(batchInput)
-      return { points, error: null as string | null }
-    } catch (err) {
-      return { points: [] as BatchPoint[], error: err instanceof Error ? err.message : String(err) }
-    }
-  }, [batchInput])
-
-  const statusLabel =
-    status === 'warming' ? 'Checking service' : status === 'ready' ? 'Ready' : status === 'connected' ? 'Connected' : 'Needs attention'
-  const markerLabel = best
-    ? `${placeName ? `${placeName} · ` : ''}${best.decision} · Yield ${best.predicted_yield_m3h.toFixed(2)} m³/h · GPI ${best.gpi.toFixed(1)}`
-    : `${placeName ? `${placeName} · ` : ''}Current selection`
-  const conversionHint = useMemo(() => {
-    if (!manualDraft.point) return null
-    if (coordinateMode === 'latlon') {
-      return `Converted automatically to UTME ${manualDraft.point.utme.toFixed(0)} and UTMN ${manualDraft.point.utmn.toFixed(0)}.`
-    }
-    return `Equivalent to latitude ${manualDraft.point.latitude.toFixed(5)} and longitude ${manualDraft.point.longitude.toFixed(5)}.`
-  }, [coordinateMode, manualDraft])
-
-  useEffect(() => {
-    let active = true
-
-    void warmBackend().then((ok) => {
-      if (!active) return
-      setStatus((current) => (current === 'connected' || current === 'error' ? current : ok ? 'ready' : 'ready'))
-    })
-
-    return () => {
-      active = false
-    }
-  }, [])
-
-  useEffect(() => {
-    if (!selectedPoint) {
-      setPlaceName(null)
-      setPlaceDetails(null)
-      setLookingUpPlace(false)
-      return
-    }
-
-    const controller = new AbortController()
-    setLookingUpPlace(true)
-
-    void reverseGeocodePoint(selectedPoint.latitude, selectedPoint.longitude, controller.signal)
-      .then((place) => {
-        if (!place) return
-        setPlaceName(place.title)
-        setPlaceDetails(place.fullLabel)
-      })
-      .catch((err) => {
-        if (err instanceof DOMException && err.name === 'AbortError') return
-        setPlaceName(null)
-        setPlaceDetails(null)
-      })
-      .finally(() => {
-        if (!controller.signal.aborted) {
-          setLookingUpPlace(false)
-        }
-      })
-
-    return () => {
-      controller.abort()
-    }
-  }, [selectedPoint])
 
   function formatRuntimeError(err: unknown) {
     if (typeof navigator !== 'undefined' && navigator.onLine === false) {
@@ -468,28 +359,201 @@ function App() {
     return 'Something went wrong while processing your request. Please try again.'
   }
 
+  const best = useMemo(() => (results && results.length ? results[0] : null), [results])
+  const latLonDraft = useMemo(
+    () => deriveManualCoordinateRequest('latlon', '', '', latitudeInput, longitudeInput),
+    [latitudeInput, longitudeInput],
+  )
+  const utmDraft = useMemo(() => deriveManualCoordinateRequest('utm', utme, utmn, '', ''), [utme, utmn])
+  const manualDraft = coordinateMode === 'latlon' ? latLonDraft : utmDraft
+  const rawLatLonPoint = useMemo(() => {
+    const latitude = Number(latitudeInput)
+    const longitude = Number(longitudeInput)
+    if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return null
+    if (!isValidLatitude(latitude) || !isValidLongitude(longitude)) return null
+    return { latitude, longitude }
+  }, [latitudeInput, longitudeInput])
+  const canPredict = !loading && !converting && !!manualDraft.request && !manualDraft.error
+
+  const decisionClass =
+    best?.decision === 'Suitable' ? 'good' : best?.decision === 'Moderate' ? 'warn' : best ? 'bad' : 'muted'
+
+  const activePoint = useMemo(() => {
+    if (best) {
+      return {
+        latitude: best.latitude,
+        longitude: best.longitude,
+      }
+    }
+    if (conversion) {
+      return {
+        latitude: conversion.authoritative.latitude,
+        longitude: conversion.authoritative.longitude,
+      }
+    }
+    return rawLatLonPoint
+  }, [best, conversion, rawLatLonPoint])
+  const mapCenter = useMemo(() => activePoint || DEFAULT_LOCATION, [activePoint])
+  const batchDraft = useMemo(() => {
+    try {
+      const points = parseBatchInput(batchInput)
+      return { points, error: null as string | null }
+    } catch (err) {
+      return { points: [] as BatchPoint[], error: err instanceof Error ? err.message : String(err) }
+    }
+  }, [batchInput])
+
+  const statusLabel =
+    status === 'warming' ? 'Checking service' : status === 'ready' ? 'Ready' : status === 'connected' ? 'Connected' : 'Needs attention'
+  const markerLabel = best
+    ? `${placeName ? `${placeName} · ` : ''}${best.decision} · Yield ${best.predicted_yield_m3h.toFixed(2)} m³/h · GPI ${best.gpi.toFixed(1)}`
+    : `${placeName ? `${placeName} · ` : ''}Current selection`
+  const conversionHint = useMemo(() => {
+    if (!conversion) return null
+    const authoritativeHemisphere = conversion.authoritative.northern ? 'N' : 'S'
+    const modelHemisphere = conversion.model.northern ? 'N' : 'S'
+    if (coordinateMode === 'latlon') {
+      const authoritativeText =
+        `Backend authoritative conversion: Zone ${conversion.authoritative.zone}${authoritativeHemisphere} ` +
+        `UTME ${conversion.authoritative.utme.toFixed(2)} and UTMN ${conversion.authoritative.utmn.toFixed(2)}.`
+      const modelText =
+        `Model input: Zone ${conversion.model.zone}${modelHemisphere} ` +
+        `UTME ${conversion.model.utme.toFixed(2)} and UTMN ${conversion.model.utmn.toFixed(2)}.`
+      return `${authoritativeText} ${modelText}`
+    }
+    return (
+      `Backend-confirmed location: ${conversion.authoritative.latitude.toFixed(5)}, ${conversion.authoritative.longitude.toFixed(5)}. ` +
+      `Model input remains Zone ${conversion.model.zone}${modelHemisphere}.`
+    )
+  }, [coordinateMode, conversion])
+
+  useEffect(() => {
+    let active = true
+
+    void warmBackend().then((ok) => {
+      if (!active) return
+      setStatus((current) => (current === 'connected' ? current : ok ? 'ready' : 'error'))
+    })
+
+    return () => {
+      active = false
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!manualDraft.request) {
+      setConversion(null)
+      setConversionError(null)
+      setConverting(false)
+      if (coordinateMode === 'latlon') {
+        setUtme('')
+        setUtmn('')
+      } else {
+        setLatitudeInput('')
+        setLongitudeInput('')
+      }
+      return
+    }
+
+    const request = manualDraft.request
+    const controller = new AbortController()
+    const timeoutId = window.setTimeout(() => {
+      setConverting(true)
+      void convertCoordinates(request, controller.signal)
+        .then((response) => {
+          setConversion(response)
+          setConversionError(null)
+          if (coordinateMode === 'latlon') {
+            setUtme(String(Math.round(response.model.utme)))
+            setUtmn(String(Math.round(response.model.utmn)))
+          } else {
+            setLatitudeInput(response.authoritative.latitude.toFixed(5))
+            setLongitudeInput(response.authoritative.longitude.toFixed(5))
+          }
+        })
+        .catch((err) => {
+          if (err instanceof DOMException && err.name === 'AbortError') return
+          setConversion(null)
+          setConversionError(formatRuntimeError(err))
+        })
+        .finally(() => {
+          if (!controller.signal.aborted) {
+            setConverting(false)
+          }
+        })
+    }, 250)
+
+    return () => {
+      window.clearTimeout(timeoutId)
+      controller.abort()
+    }
+  }, [coordinateMode, manualDraft.request])
+
+  useEffect(() => {
+    if (!activePoint) {
+      setPlaceName(null)
+      setPlaceDetails(null)
+      setLookingUpPlace(false)
+      return
+    }
+
+    const controller = new AbortController()
+    setLookingUpPlace(true)
+
+    void reverseGeocodePoint(activePoint.latitude, activePoint.longitude, controller.signal)
+      .then((place) => {
+        if (!place) {
+          setPlaceName(null)
+          setPlaceDetails(null)
+          return
+        }
+        setPlaceName(place.title)
+        setPlaceDetails(place.fullLabel)
+      })
+      .catch((err) => {
+        if (err instanceof DOMException && err.name === 'AbortError') return
+        setPlaceName(null)
+        setPlaceDetails(null)
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) {
+          setLookingUpPlace(false)
+        }
+      })
+
+    return () => {
+      controller.abort()
+    }
+  }, [activePoint])
+
   function resetSelectionState(summary: string) {
-    setSelectedPoint(null)
     setPlaceName(null)
     setPlaceDetails(null)
     setResults(null)
     setLocationSummary(summary)
     setError(null)
+    setConversionError(null)
     setStatus('ready')
   }
 
+  function syncInputsFromConversion(nextConversion: ConvertCoordinatesResponse) {
+    setConversion(nextConversion)
+    setConversionError(null)
+    setUtme(String(Math.round(nextConversion.model.utme)))
+    setUtmn(String(Math.round(nextConversion.model.utmn)))
+    setLatitudeInput(nextConversion.authoritative.latitude.toFixed(5))
+    setLongitudeInput(nextConversion.authoritative.longitude.toFixed(5))
+  }
+
   function switchCoordinateMode(nextMode: CoordinateMode) {
-    if (manualDraft.point) {
-      setUtme(String(Math.round(manualDraft.point.utme)))
-      setUtmn(String(Math.round(manualDraft.point.utmn)))
-      setLatitudeInput(manualDraft.point.latitude.toFixed(5))
-      setLongitudeInput(manualDraft.point.longitude.toFixed(5))
+    if (conversion) {
+      syncInputsFromConversion(conversion)
     }
     setCoordinateMode(nextMode)
     resetSelectionState(nextMode === 'latlon' ? 'Latitude and longitude input selected.' : 'UTM coordinate input selected.')
   }
 
-  function downloadResultsCsv() {
+  async function downloadResultsCsv() {
     if (!results?.length) return
 
     const header = [
@@ -525,10 +589,14 @@ function App() {
         .join(','),
     )
 
-    downloadFile('drillscout-findings.csv', [header.join(','), ...rows].join('\n'), 'text/csv;charset=utf-8')
+    try {
+      await saveTextFile('drillscout-findings.csv', [header.join(','), ...rows].join('\n'), 'text/csv;charset=utf-8')
+    } catch (err) {
+      setError(formatRuntimeError(err))
+    }
   }
 
-  function downloadResultsReport() {
+  async function downloadResultsReport() {
     if (!results?.length || !best) return
 
     const lines = [
@@ -542,8 +610,11 @@ function App() {
       `GPI: ${best.gpi.toFixed(2)}`,
       `Predicted yield: ${best.predicted_yield_m3h.toFixed(2)} m³/h`,
       `Predicted SWL: ${best.predicted_static_water_level_m.toFixed(2)} m`,
-      `Coordinates: UTME ${best.utme.toFixed(2)}, UTMN ${best.utmn.toFixed(2)}`,
+      `Model coordinates: UTME ${best.utme.toFixed(2)}, UTMN ${best.utmn.toFixed(2)}`,
       `Latitude/Longitude: ${best.latitude.toFixed(5)}, ${best.longitude.toFixed(5)}`,
+      conversion
+        ? `Authoritative UTM: Zone ${conversion.authoritative.zone}${conversion.authoritative.northern ? 'N' : 'S'} · UTME ${conversion.authoritative.utme.toFixed(2)} · UTMN ${conversion.authoritative.utmn.toFixed(2)}`
+        : 'Authoritative UTM: Not available',
       `Recommendation: ${best.recommendation}`,
       '',
       'All evaluated points',
@@ -553,7 +624,11 @@ function App() {
       ),
     ]
 
-    downloadFile('drillscout-findings-report.txt', lines.join('\n'), 'text/plain;charset=utf-8')
+    try {
+      await saveTextFile('drillscout-findings-report.txt', lines.join('\n'), 'text/plain;charset=utf-8')
+    } catch (err) {
+      setError(formatRuntimeError(err))
+    }
   }
 
   async function onPredictManual() {
@@ -561,35 +636,35 @@ function App() {
     setLoading(true)
     setStatus('warming')
     try {
-      if (!manualDraft.point) {
+      if (!manualDraft.request) {
         throw new Error(manualDraft.error || 'Enter a valid location before predicting.')
       }
-      const resp =
-        coordinateMode === 'latlon'
-          ? await predict({
-              source: 'manual',
-              point_geo: {
-                latitude: manualDraft.point.latitude,
-                longitude: manualDraft.point.longitude,
-              },
-            })
-          : await predict({
-              source: 'manual',
-              point_utm: {
-                utme: manualDraft.point.utme,
-                utmn: manualDraft.point.utmn,
-              },
-            })
+
+      let resp
+      if ('point_geo' in manualDraft.request) {
+        resp = await predict({
+          source: 'manual',
+          point_geo: manualDraft.request.point_geo,
+        })
+      } else {
+        resp = await predict({
+          source: 'manual',
+          point_utm: {
+            utme: manualDraft.request.point_utm.utme,
+            utmn: manualDraft.request.point_utm.utmn,
+          },
+        })
+      }
+
       setResults(resp.results)
-      setSelectedPoint({ latitude: resp.best.latitude, longitude: resp.best.longitude })
       setUtme(String(Math.round(resp.best.utme)))
       setUtmn(String(Math.round(resp.best.utmn)))
       setLatitudeInput(resp.best.latitude.toFixed(5))
       setLongitudeInput(resp.best.longitude.toFixed(5))
       setLocationSummary(
         coordinateMode === 'latlon'
-          ? 'Latitude and longitude were converted automatically and evaluated successfully.'
-          : 'UTM coordinates were evaluated successfully.',
+          ? 'Backend-converted latitude and longitude were evaluated successfully.'
+          : 'Backend-confirmed UTM coordinates were evaluated successfully.',
       )
       setStatus('connected')
     } catch (err) {
@@ -609,6 +684,7 @@ function App() {
       if (!navigator.geolocation) {
         throw new Error('Geolocation is unavailable in this browser or app environment.')
       }
+
       const pos = await new Promise<GeolocationPosition>((resolve, reject) => {
         navigator.geolocation.getCurrentPosition(resolve, reject, {
           enableHighAccuracy: true,
@@ -616,16 +692,13 @@ function App() {
           maximumAge: 60000,
         })
       })
+
       const longitude = pos.coords.longitude
       const latitude = pos.coords.latitude
-      const detectedUtm = latLonToUtm(latitude, longitude)
+      const converted = await convertCoordinates({ point_geo: { longitude, latitude } })
 
       setCoordinateMode('latlon')
-      setSelectedPoint({ latitude, longitude })
-      setUtme(String(Math.round(detectedUtm.utme)))
-      setUtmn(String(Math.round(detectedUtm.utmn)))
-      setLatitudeInput(latitude.toFixed(5))
-      setLongitudeInput(longitude.toFixed(5))
+      syncInputsFromConversion(converted)
 
       const accuracy =
         typeof pos.coords.accuracy === 'number' && Number.isFinite(pos.coords.accuracy)
@@ -635,9 +708,10 @@ function App() {
 
       const resp = await predict({ source: 'geolocation', point_geo: { longitude, latitude } })
       setResults(resp.results)
-      setSelectedPoint({ latitude: resp.best.latitude, longitude: resp.best.longitude })
       setUtme(String(Math.round(resp.best.utme)))
       setUtmn(String(Math.round(resp.best.utmn)))
+      setLatitudeInput(resp.best.latitude.toFixed(5))
+      setLongitudeInput(resp.best.longitude.toFixed(5))
       setLocationSummary(`Detected your position with ${accuracy}. The map marker moved to your location.`)
       setStatus('connected')
     } catch (err) {
@@ -659,7 +733,7 @@ function App() {
       }
       const resp = await predict({ source: 'manual', points_utm: points })
       setResults(resp.results)
-      setSelectedPoint({ latitude: resp.best.latitude, longitude: resp.best.longitude })
+      setConversion(null)
       setLatitudeInput(resp.best.latitude.toFixed(5))
       setLongitudeInput(resp.best.longitude.toFixed(5))
       setUtme(String(Math.round(resp.best.utme)))
@@ -675,18 +749,18 @@ function App() {
   }
 
   function handleMapClick(latitude: number, longitude: number) {
-    const utm = latLonToUtm(latitude, longitude)
     setCoordinateMode('latlon')
-    setUtme(String(Math.round(utm.utme)))
-    setUtmn(String(Math.round(utm.utmn)))
     setLatitudeInput(latitude.toFixed(5))
     setLongitudeInput(longitude.toFixed(5))
-    setSelectedPoint({ latitude, longitude })
+    setUtme('')
+    setUtmn('')
+    setConversion(null)
     setPlaceName(null)
     setPlaceDetails(null)
     setResults(null)
     setLocationSummary('Map selection updated. Run prediction to evaluate this point.')
     setError(null)
+    setConversionError(null)
     setStatus('ready')
   }
 
@@ -784,19 +858,20 @@ function App() {
               Use my location
             </button>
             <button className="btn primary" onClick={onPredictManual} disabled={!canPredict}>
-              {loading ? 'Predicting…' : 'Predict suitability'}
+              {loading ? 'Predicting…' : converting ? 'Converting…' : 'Predict suitability'}
             </button>
           </div>
 
           {error ? <div className="error">{error}</div> : null}
           {!error && manualDraft.error ? <div className="error">{manualDraft.error}</div> : null}
+          {!error && !manualDraft.error && conversionError ? <div className="error">{conversionError}</div> : null}
           <p className="hint">
             {coordinateMode === 'latlon'
-              ? 'Enter latitude and longitude in decimal degrees, then the app converts them automatically for the model.'
-              : 'Enter UTME and UTMN in meters, or switch to latitude/longitude if that is easier for the user.'}
+              ? 'Enter latitude and longitude in decimal degrees. The backend returns authoritative converted coordinates and the model-aligned UTM input.'
+              : 'Enter UTME and UTMN in meters for the model coordinate system (Zone 36N), or switch to latitude/longitude for general place entry.'}
           </p>
           <p className="hint">Click the map to choose a point and automatically fill both coordinate formats.</p>
-          <p className="hint">{locationSummary || conversionHint || 'Choose a point to begin.'}</p>
+          <p className="hint">{locationSummary || conversionHint || (converting ? 'Resolving coordinates with the backend…' : 'Choose a point to begin.')}</p>
 
           <details className="details">
             <summary>Batch mode, charts, and exports</summary>
@@ -824,7 +899,7 @@ function App() {
 
           <div className="resultPanel">
             {!best ? (
-              <div className="muted">No prediction yet. Click the map or use your location to choose a point.</div>
+              <div className="muted">No prediction yet. Click the map, enter coordinates, or use your location to choose a point.</div>
             ) : (
               <>
                 <div className="placePanel">
@@ -839,16 +914,23 @@ function App() {
                     <b>{best.predicted_static_water_level_m.toFixed(2)} m</b>
                   </div>
                   <div className="muted">
-                    Coordinates: {best.latitude.toFixed(5)}, {best.longitude.toFixed(5)} · UTME <b>{best.utme.toFixed(0)}</b> · UTMN{' '}
+                    Coordinates: {best.latitude.toFixed(5)}, {best.longitude.toFixed(5)} · Model UTME <b>{best.utme.toFixed(0)}</b> · Model UTMN{' '}
                     <b>{best.utmn.toFixed(0)}</b>
                   </div>
+                  {conversion ? (
+                    <div className="muted">
+                      Authoritative UTM: Zone {conversion.authoritative.zone}
+                      {conversion.authoritative.northern ? 'N' : 'S'} · UTME <b>{conversion.authoritative.utme.toFixed(0)}</b> · UTMN{' '}
+                      <b>{conversion.authoritative.utmn.toFixed(0)}</b>
+                    </div>
+                  ) : null}
                   <div className="muted">{best.recommendation}</div>
                 </div>
                 <div className="buttons compact">
-                  <button className="btn secondary" onClick={downloadResultsCsv}>
+                  <button className="btn secondary" onClick={() => void downloadResultsCsv()}>
                     Download CSV
                   </button>
-                  <button className="btn secondary" onClick={downloadResultsReport}>
+                  <button className="btn secondary" onClick={() => void downloadResultsReport()}>
                     Download report
                   </button>
                 </div>
