@@ -1,6 +1,6 @@
 import './App.css'
-import { useMemo, useState } from 'react'
-import { predict, type PredictResult } from './api'
+import { useEffect, useMemo, useState } from 'react'
+import { getApiBaseUrl, predict, type PredictResult, warmBackend } from './api'
 import { MapPreview } from './components/MapPreview'
 
 type LatLng = {
@@ -118,7 +118,9 @@ function App() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [results, setResults] = useState<PredictResult[] | null>(null)
-  const [status, setStatus] = useState<'ready' | 'connected' | 'error'>('ready')
+  const [status, setStatus] = useState<'ready' | 'warming' | 'connected' | 'error'>('warming')
+  const [selectedPoint, setSelectedPoint] = useState<LatLng | null>(null)
+  const [locationSummary, setLocationSummary] = useState<string | null>(null)
 
   const best = useMemo(() => (results && results.length ? results[0] : null), [results])
 
@@ -131,10 +133,26 @@ function App() {
     best?.decision === 'Suitable' ? 'good' : best?.decision === 'Moderate' ? 'warn' : best ? 'bad' : 'muted'
 
   const mapCenter = useMemo(() => {
-    if (best) return { latitude: best.latitude, longitude: best.longitude }
+    if (selectedPoint) return selectedPoint
     if (hasValidManual) return utmToLatLon(manualUtme, manualUtmn)
     return DEFAULT_LOCATION
-  }, [best, hasValidManual, manualUtme, manualUtmn])
+  }, [selectedPoint, hasValidManual, manualUtme, manualUtmn])
+
+  const statusLabel =
+    status === 'warming' ? 'Waking backend' : status === 'ready' ? 'Ready' : status === 'connected' ? 'Connected' : 'Error'
+
+  useEffect(() => {
+    let active = true
+
+    void warmBackend().then((ok) => {
+      if (!active) return
+      setStatus((current) => (current === 'connected' || current === 'error' ? current : ok ? 'ready' : 'ready'))
+    })
+
+    return () => {
+      active = false
+    }
+  }, [])
 
   function formatRuntimeError(err: unknown) {
     if (err instanceof Error) return err.message
@@ -150,12 +168,15 @@ function App() {
   async function onPredictManual() {
     setError(null)
     setLoading(true)
+    setStatus('warming')
     try {
       const e = Number(utme)
       const n = Number(utmn)
       if (!Number.isFinite(e) || !Number.isFinite(n)) throw new Error('Please enter valid numeric UTME and UTMN.')
       const resp = await predict({ source: 'manual', point_utm: { utme: e, utmn: n } })
       setResults(resp.results)
+      setSelectedPoint({ latitude: resp.best.latitude, longitude: resp.best.longitude })
+      setLocationSummary('Prediction is based on the current coordinate inputs.')
       setStatus('connected')
     } catch (err) {
       setError(formatRuntimeError(err))
@@ -168,18 +189,36 @@ function App() {
   async function onUseMyLocation() {
     setError(null)
     setLoading(true)
+    setResults(null)
+    setStatus('warming')
     try {
       if (!navigator.geolocation) {
         throw new Error('Geolocation is unavailable in this browser or app environment.')
       }
       const pos = await new Promise<GeolocationPosition>((resolve, reject) => {
-        navigator.geolocation.getCurrentPosition(resolve, reject, { enableHighAccuracy: true, timeout: 15000 })
+        navigator.geolocation.getCurrentPosition(resolve, reject, {
+          enableHighAccuracy: true,
+          timeout: 20000,
+          maximumAge: 0,
+        })
       })
       const longitude = pos.coords.longitude
       const latitude = pos.coords.latitude
+      const detectedUtm = latLonToUtm(latitude, longitude)
+
+      setSelectedPoint({ latitude, longitude })
+      setUtme(String(Math.round(detectedUtm.utme)))
+      setUtmn(String(Math.round(detectedUtm.utmn)))
+
+      const accuracy =
+        typeof pos.coords.accuracy === 'number' && Number.isFinite(pos.coords.accuracy)
+          ? `accuracy about ${Math.round(pos.coords.accuracy)} m`
+          : 'device GPS reading available'
+      setLocationSummary(`Detected your current position with ${accuracy}.`)
 
       const resp = await predict({ source: 'geolocation', point_geo: { longitude, latitude } })
       setResults(resp.results)
+      setSelectedPoint({ latitude: resp.best.latitude, longitude: resp.best.longitude })
       setUtme(String(Math.round(resp.best.utme)))
       setUtmn(String(Math.round(resp.best.utmn)))
       setStatus('connected')
@@ -195,7 +234,11 @@ function App() {
     const utm = latLonToUtm(latitude, longitude)
     setUtme(String(Math.round(utm.utme)))
     setUtmn(String(Math.round(utm.utmn)))
+    setSelectedPoint({ latitude, longitude })
+    setResults(null)
+    setLocationSummary('Map selection updated. Run prediction to evaluate this point.')
     setError(null)
+    setStatus('ready')
   }
 
   return (
@@ -206,7 +249,7 @@ function App() {
             <div className="title">DrillScout</div>
             <div className="subtitle">Predict the best borehole siting location from coordinates or your current position.</div>
           </div>
-          <div className={`status ${status}`}>{status === 'ready' ? 'Ready' : status === 'connected' ? 'Connected' : 'Error'}</div>
+          <div className={`status ${status}`}>{statusLabel}</div>
         </div>
       </header>
 
@@ -217,11 +260,33 @@ function App() {
           <div className="row">
             <label>
               <div className="label">UTME (m)</div>
-              <input value={utme} onChange={(e) => setUtme(e.target.value)} inputMode="decimal" />
+              <input
+                value={utme}
+                onChange={(e) => {
+                  setUtme(e.target.value)
+                  setSelectedPoint(null)
+                  setResults(null)
+                  setLocationSummary('Coordinate inputs updated manually.')
+                  setError(null)
+                  setStatus('ready')
+                }}
+                inputMode="decimal"
+              />
             </label>
             <label>
               <div className="label">UTMN (m)</div>
-              <input value={utmn} onChange={(e) => setUtmn(e.target.value)} inputMode="decimal" />
+              <input
+                value={utmn}
+                onChange={(e) => {
+                  setUtmn(e.target.value)
+                  setSelectedPoint(null)
+                  setResults(null)
+                  setLocationSummary('Coordinate inputs updated manually.')
+                  setError(null)
+                  setStatus('ready')
+                }}
+                inputMode="decimal"
+              />
             </label>
           </div>
 
@@ -236,6 +301,7 @@ function App() {
 
           {error ? <div className="error">{error}</div> : null}
           <p className="hint">Click the map to choose a point and automatically fill UTME/UTMN.</p>
+          <p className="hint">{locationSummary || `API: ${getApiBaseUrl()}`}</p>
         </section>
 
         <section className="card">

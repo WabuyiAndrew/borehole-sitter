@@ -52,25 +52,75 @@ function resolveApiBaseUrl() {
 }
 
 const API_BASE_URL = resolveApiBaseUrl()
-const API_URL = `${API_BASE_URL}/predict`
+const PREDICT_URL = `${API_BASE_URL}/predict`
+const HEALTH_URL = `${API_BASE_URL}/health`
 
-export async function predict(req: PredictRequest): Promise<PredictResponse> {
+async function readErrorMessage(res: Response) {
+  const contentType = res.headers.get('content-type') || ''
+  if (contentType.includes('application/json')) {
+    const data = (await res.json().catch(() => null)) as { detail?: string; message?: string } | null
+    if (typeof data?.detail === 'string' && data.detail.trim()) return data.detail
+    if (typeof data?.message === 'string' && data.message.trim()) return data.message
+  }
+
+  const text = await res.text().catch(() => '')
+  return text.trim() || `Request failed with status ${res.status}`
+}
+
+async function fetchJson<T>(url: string, init: RequestInit, timeoutMs: number): Promise<T> {
+  const controller = new AbortController()
+  const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs)
+
   try {
-    const res = await fetch(API_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(req),
+    const res = await fetch(url, {
+      ...init,
+      signal: controller.signal,
     })
+
     if (!res.ok) {
-      const txt = await res.text().catch(() => '')
-      throw new Error(txt || `Prediction failed (${res.status})`)
+      const message = await readErrorMessage(res)
+      throw new Error(message)
     }
-    return res.json()
+
+    return (await res.json()) as T
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err)
-    throw new Error(
-      `Unable to reach the prediction service at ${API_URL}. Please make sure the backend is running and the API base URL is correct. (${message})`,
-    )
+    if (err instanceof DOMException && err.name === 'AbortError') {
+      throw new Error(`The prediction service is taking too long to respond at ${url}. It may be waking up from a cold start.`)
+    }
+
+    if (err instanceof TypeError) {
+      throw new Error(
+        `Unable to reach the prediction service at ${url}. Please make sure the backend is running, CORS is enabled for this app origin, and the API base URL is correct. (${err.message})`,
+      )
+    }
+
+    throw err
+  } finally {
+    window.clearTimeout(timeoutId)
   }
 }
 
+export function getApiBaseUrl() {
+  return API_BASE_URL
+}
+
+export async function warmBackend() {
+  try {
+    await fetchJson<{ ok: boolean }>(HEALTH_URL, { method: 'GET' }, 45000)
+    return true
+  } catch {
+    return false
+  }
+}
+
+export async function predict(req: PredictRequest): Promise<PredictResponse> {
+  return fetchJson<PredictResponse>(
+    PREDICT_URL,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(req),
+    },
+    60000,
+  )
+}
