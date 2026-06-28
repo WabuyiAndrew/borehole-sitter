@@ -126,6 +126,41 @@ class AwojaModelRuntime:
         lon, lat = self._utm36_to_geo.transform(utme, utmn)
         return float(lon), float(lat)
 
+    def coordinate_reference(self, utme: float, utmn: float, zone: int, northern: bool) -> Dict[str, Any]:
+        lon, lat = self.utm_to_geo(utme, utmn, zone=zone, northern=northern)
+        return {
+            "utme": float(utme),
+            "utmn": float(utmn),
+            "longitude": float(lon),
+            "latitude": float(lat),
+            "zone": int(zone),
+            "northern": bool(northern),
+            "epsg": self.utm_epsg(zone, northern),
+        }
+
+    def convert_from_geo(self, lon: float, lat: float) -> Dict[str, Dict[str, Any]]:
+        auth_e, auth_n, auth_zone, auth_northern, _ = self.geo_to_utm(lon, lat)
+        model_e, model_n = self.geo_to_utm36(lon, lat)
+        return {
+            "authoritative": self.coordinate_reference(auth_e, auth_n, auth_zone, auth_northern),
+            "model": self.coordinate_reference(model_e, model_n, MODEL_UTM_ZONE, MODEL_UTM_NORTHERN),
+        }
+
+    def convert_from_utm(
+        self,
+        utme: float,
+        utmn: float,
+        zone: int = MODEL_UTM_ZONE,
+        northern: bool = MODEL_UTM_NORTHERN,
+    ) -> Dict[str, Dict[str, Any]]:
+        normalized_zone = self.normalize_utm_zone(zone)
+        lon, lat = self.utm_to_geo(utme, utmn, zone=normalized_zone, northern=northern)
+        model_e, model_n = self.geo_to_utm36(lon, lat)
+        return {
+            "authoritative": self.coordinate_reference(float(utme), float(utmn), normalized_zone, northern),
+            "model": self.coordinate_reference(model_e, model_n, MODEL_UTM_ZONE, MODEL_UTM_NORTHERN),
+        }
+
     # -----------------------
     # Feature preparation
     # -----------------------
