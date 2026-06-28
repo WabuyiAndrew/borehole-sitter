@@ -85,13 +85,14 @@ async function fetchJson<T>(url: string, init: RequestInit, timeoutMs: number): 
     return (await res.json()) as T
   } catch (err) {
     if (err instanceof DOMException && err.name === 'AbortError') {
-      throw new Error(`The prediction service is taking too long to respond at ${url}. It may be waking up from a cold start.`)
+      throw new Error('The service is taking longer than expected. Please try again in a moment.')
     }
 
     if (err instanceof TypeError) {
-      throw new Error(
-        `Unable to reach the prediction service at ${url}. Please make sure the backend is running, CORS is enabled for this app origin, and the API base URL is correct. (${err.message})`,
-      )
+      if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+        throw new Error('No internet connection was detected. Please reconnect and try again.')
+      }
+      throw new Error('Unable to connect right now. Please check your internet connection and try again.')
     }
 
     throw err
