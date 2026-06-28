@@ -1,6 +1,7 @@
 import './App.css'
 import { useEffect, useMemo, useState } from 'react'
 import { getApiBaseUrl, predict, type PredictResult, warmBackend } from './api'
+import { Charts } from './components/Charts'
 import { MapPreview } from './components/MapPreview'
 
 type LatLng = {
@@ -8,10 +9,22 @@ type LatLng = {
   longitude: number
 }
 
+type BatchPoint = {
+  utme: number
+  utmn: number
+}
+
+type PlaceLookup = {
+  title: string
+  fullLabel: string
+}
+
 const DEFAULT_LOCATION: LatLng = {
   latitude: 0.55,
   longitude: 36.80,
 }
+
+const DEFAULT_BATCH_INPUT = ['520000,180000', '520250,180250', '520500,180500'].join('\n')
 
 const WGS84_A = 6378137.0
 const WGS84_ECCSQ = 0.006694379990141316
@@ -112,15 +125,114 @@ function utmToLatLon(utme: number, utmn: number, zone = 36, northern = true): La
   return { latitude: radToDeg(lat), longitude: radToDeg(lon) }
 }
 
+function parseBatchInput(value: string): BatchPoint[] {
+  const lines = value
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+
+  return lines.map((line, index) => {
+    const parts = line
+      .split(/[,\s]+/)
+      .map((part) => part.trim())
+      .filter(Boolean)
+
+    if (parts.length < 2) {
+      throw new Error(`Line ${index + 1} must contain UTME and UTMN, for example: 520000,180000`)
+    }
+
+    const utme = Number(parts[0])
+    const utmn = Number(parts[1])
+
+    if (!Number.isFinite(utme) || !Number.isFinite(utmn)) {
+      throw new Error(`Line ${index + 1} contains invalid numeric coordinates.`)
+    }
+
+    return { utme, utmn }
+  })
+}
+
+function buildPlaceLookup(data: unknown, latitude: number, longitude: number): PlaceLookup | null {
+  if (typeof data !== 'object' || data === null) return null
+
+  const candidate = data as {
+    display_name?: string
+    address?: Record<string, string | undefined>
+  }
+  const address = candidate.address || {}
+  const titleParts = [
+    address.road,
+    address.suburb,
+    address.village,
+    address.town,
+    address.city,
+    address.county,
+    address.state,
+    address.country,
+  ].filter(Boolean) as string[]
+
+  const title = titleParts.slice(0, 3).join(', ')
+  const fallback = `${latitude.toFixed(5)}, ${longitude.toFixed(5)}`
+
+  return {
+    title: title || candidate.display_name || fallback,
+    fullLabel: candidate.display_name || title || fallback,
+  }
+}
+
+async function reverseGeocodePoint(latitude: number, longitude: number, signal: AbortSignal): Promise<PlaceLookup | null> {
+  const url = new URL('https://nominatim.openstreetmap.org/reverse')
+  url.searchParams.set('format', 'jsonv2')
+  url.searchParams.set('lat', String(latitude))
+  url.searchParams.set('lon', String(longitude))
+  url.searchParams.set('zoom', '14')
+  url.searchParams.set('addressdetails', '1')
+
+  const response = await fetch(url.toString(), {
+    method: 'GET',
+    signal,
+    headers: {
+      Accept: 'application/json',
+    },
+  })
+
+  if (!response.ok) return null
+
+  const payload = (await response.json()) as unknown
+  return buildPlaceLookup(payload, latitude, longitude)
+}
+
+function escapeCsvValue(value: string | number) {
+  const text = String(value)
+  if (text.includes(',') || text.includes('"') || text.includes('\n')) {
+    return `"${text.replace(/"/g, '""')}"`
+  }
+  return text
+}
+
+function downloadFile(filename: string, content: string, mimeType: string) {
+  const blob = new Blob([content], { type: mimeType })
+  const href = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = href
+  link.download = filename
+  link.click()
+  URL.revokeObjectURL(href)
+}
+
 function App() {
   const [utme, setUtme] = useState('520000')
   const [utmn, setUtmn] = useState('180000')
+  const [batchInput, setBatchInput] = useState(DEFAULT_BATCH_INPUT)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [results, setResults] = useState<PredictResult[] | null>(null)
   const [status, setStatus] = useState<'ready' | 'warming' | 'connected' | 'error'>('warming')
   const [selectedPoint, setSelectedPoint] = useState<LatLng | null>(null)
   const [locationSummary, setLocationSummary] = useState<string | null>(null)
+  const [placeName, setPlaceName] = useState<string | null>(null)
+  const [placeDetails, setPlaceDetails] = useState<string | null>(null)
+  const [lookingUpPlace, setLookingUpPlace] = useState(false)
 
   const best = useMemo(() => (results && results.length ? results[0] : null), [results])
 
@@ -137,9 +249,20 @@ function App() {
     if (hasValidManual) return utmToLatLon(manualUtme, manualUtmn)
     return DEFAULT_LOCATION
   }, [selectedPoint, hasValidManual, manualUtme, manualUtmn])
+  const batchDraft = useMemo(() => {
+    try {
+      const points = parseBatchInput(batchInput)
+      return { points, error: null as string | null }
+    } catch (err) {
+      return { points: [] as BatchPoint[], error: err instanceof Error ? err.message : String(err) }
+    }
+  }, [batchInput])
 
   const statusLabel =
     status === 'warming' ? 'Waking backend' : status === 'ready' ? 'Ready' : status === 'connected' ? 'Connected' : 'Error'
+  const markerLabel = best
+    ? `${placeName ? `${placeName} · ` : ''}${best.decision} · Yield ${best.predicted_yield_m3h.toFixed(2)} m³/h · GPI ${best.gpi.toFixed(1)}`
+    : `${placeName ? `${placeName} · ` : ''}Current selection`
 
   useEffect(() => {
     let active = true
@@ -154,6 +277,39 @@ function App() {
     }
   }, [])
 
+  useEffect(() => {
+    if (!selectedPoint) {
+      setPlaceName(null)
+      setPlaceDetails(null)
+      setLookingUpPlace(false)
+      return
+    }
+
+    const controller = new AbortController()
+    setLookingUpPlace(true)
+
+    void reverseGeocodePoint(selectedPoint.latitude, selectedPoint.longitude, controller.signal)
+      .then((place) => {
+        if (!place) return
+        setPlaceName(place.title)
+        setPlaceDetails(place.fullLabel)
+      })
+      .catch((err) => {
+        if (err instanceof DOMException && err.name === 'AbortError') return
+        setPlaceName(null)
+        setPlaceDetails(null)
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) {
+          setLookingUpPlace(false)
+        }
+      })
+
+    return () => {
+      controller.abort()
+    }
+  }, [selectedPoint])
+
   function formatRuntimeError(err: unknown) {
     if (err instanceof Error) return err.message
     if (typeof err === 'string') return err
@@ -163,6 +319,83 @@ function App() {
       if ('code' in maybe) return `Error ${String(maybe.code)}: ${String(maybe.message ?? 'Location not available')}`
     }
     return String(err)
+  }
+
+  function resetSelectionState(summary: string) {
+    setSelectedPoint(null)
+    setPlaceName(null)
+    setPlaceDetails(null)
+    setResults(null)
+    setLocationSummary(summary)
+    setError(null)
+    setStatus('ready')
+  }
+
+  function downloadResultsCsv() {
+    if (!results?.length) return
+
+    const header = [
+      'rank',
+      'utme',
+      'utmn',
+      'latitude',
+      'longitude',
+      'decision',
+      'suitability_class',
+      'gpi',
+      'predicted_yield_m3h',
+      'predicted_static_water_level_m',
+      'nearest_background_distance_m',
+      'recommendation',
+    ]
+    const rows = results.map((result, index) =>
+      [
+        index + 1,
+        result.utme,
+        result.utmn,
+        result.latitude,
+        result.longitude,
+        result.decision,
+        result.suitability_class,
+        result.gpi,
+        result.predicted_yield_m3h,
+        result.predicted_static_water_level_m,
+        result.nearest_background_distance_m,
+        result.recommendation,
+      ]
+        .map(escapeCsvValue)
+        .join(','),
+    )
+
+    downloadFile('drillscout-findings.csv', [header.join(','), ...rows].join('\n'), 'text/csv;charset=utf-8')
+  }
+
+  function downloadResultsReport() {
+    if (!results?.length || !best) return
+
+    const lines = [
+      'DrillScout Findings Report',
+      `Generated: ${new Date().toISOString()}`,
+      `Place: ${placeDetails || placeName || 'Not resolved'}`,
+      `API: ${getApiBaseUrl()}`,
+      '',
+      'Best candidate',
+      `Decision: ${best.decision}`,
+      `GPI: ${best.gpi.toFixed(2)}`,
+      `Predicted yield: ${best.predicted_yield_m3h.toFixed(2)} m³/h`,
+      `Predicted SWL: ${best.predicted_static_water_level_m.toFixed(2)} m`,
+      `Coordinates: UTME ${best.utme.toFixed(2)}, UTMN ${best.utmn.toFixed(2)}`,
+      `Latitude/Longitude: ${best.latitude.toFixed(5)}, ${best.longitude.toFixed(5)}`,
+      `Recommendation: ${best.recommendation}`,
+      '',
+      'All evaluated points',
+      ...results.map(
+        (result, index) =>
+          `${index + 1}. ${result.decision} | GPI ${result.gpi.toFixed(2)} | Yield ${result.predicted_yield_m3h.toFixed(2)} m³/h | SWL ${result.predicted_static_water_level_m.toFixed(2)} m | UTME ${result.utme.toFixed(2)} | UTMN ${result.utmn.toFixed(2)}`,
+      ),
+    ]
+
+    downloadFile('drillscout-findings-report.txt', lines.join('\n'), 'text/plain;charset=utf-8')
   }
 
   async function onPredictManual() {
@@ -176,7 +409,7 @@ function App() {
       const resp = await predict({ source: 'manual', point_utm: { utme: e, utmn: n } })
       setResults(resp.results)
       setSelectedPoint({ latitude: resp.best.latitude, longitude: resp.best.longitude })
-      setLocationSummary('Prediction is based on the current coordinate inputs.')
+      setLocationSummary('Prediction is based on the current coordinate inputs. The map centers on the evaluated point.')
       setStatus('connected')
     } catch (err) {
       setError(formatRuntimeError(err))
@@ -221,6 +454,31 @@ function App() {
       setSelectedPoint({ latitude: resp.best.latitude, longitude: resp.best.longitude })
       setUtme(String(Math.round(resp.best.utme)))
       setUtmn(String(Math.round(resp.best.utmn)))
+      setLocationSummary(`Detected your position with ${accuracy}. The map marker moved to your location.`)
+      setStatus('connected')
+    } catch (err) {
+      setError(formatRuntimeError(err))
+      setStatus('error')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  async function onPredictBatch() {
+    setError(null)
+    setLoading(true)
+    setStatus('warming')
+    try {
+      const points = parseBatchInput(batchInput)
+      if (points.length < 2) {
+        throw new Error('Enter at least two coordinate pairs in batch mode to render comparison charts.')
+      }
+      const resp = await predict({ source: 'manual', points_utm: points })
+      setResults(resp.results)
+      setSelectedPoint({ latitude: resp.best.latitude, longitude: resp.best.longitude })
+      setUtme(String(Math.round(resp.best.utme)))
+      setUtmn(String(Math.round(resp.best.utmn)))
+      setLocationSummary(`Batch analysis completed for ${resp.results.length} points. The map centers on the best-ranked candidate.`)
       setStatus('connected')
     } catch (err) {
       setError(formatRuntimeError(err))
@@ -235,6 +493,8 @@ function App() {
     setUtme(String(Math.round(utm.utme)))
     setUtmn(String(Math.round(utm.utmn)))
     setSelectedPoint({ latitude, longitude })
+    setPlaceName(null)
+    setPlaceDetails(null)
     setResults(null)
     setLocationSummary('Map selection updated. Run prediction to evaluate this point.')
     setError(null)
@@ -264,11 +524,7 @@ function App() {
                 value={utme}
                 onChange={(e) => {
                   setUtme(e.target.value)
-                  setSelectedPoint(null)
-                  setResults(null)
-                  setLocationSummary('Coordinate inputs updated manually.')
-                  setError(null)
-                  setStatus('ready')
+                  resetSelectionState('Coordinate inputs updated manually.')
                 }}
                 inputMode="decimal"
               />
@@ -279,11 +535,7 @@ function App() {
                 value={utmn}
                 onChange={(e) => {
                   setUtmn(e.target.value)
-                  setSelectedPoint(null)
-                  setResults(null)
-                  setLocationSummary('Coordinate inputs updated manually.')
-                  setError(null)
-                  setStatus('ready')
+                  resetSelectionState('Coordinate inputs updated manually.')
                 }}
                 inputMode="decimal"
               />
@@ -302,6 +554,18 @@ function App() {
           {error ? <div className="error">{error}</div> : null}
           <p className="hint">Click the map to choose a point and automatically fill UTME/UTMN.</p>
           <p className="hint">{locationSummary || `API: ${getApiBaseUrl()}`}</p>
+
+          <details className="details">
+            <summary>Batch mode, charts, and exports</summary>
+            <p className="hint">Enter one coordinate pair per line as `UTME,UTMN` to compare candidate points and generate charts.</p>
+            <textarea rows={6} value={batchInput} onChange={(e) => setBatchInput(e.target.value)} />
+            <div className="buttons compact">
+              <button className="btn secondary" onClick={onPredictBatch} disabled={loading || !!batchDraft.error}>
+                {loading ? 'Analyzing…' : `Analyze ${batchDraft.points.length || 0} points`}
+              </button>
+            </div>
+            {batchDraft.error ? <div className="error">{batchDraft.error}</div> : null}
+          </details>
         </section>
 
         <section className="card">
@@ -310,7 +574,8 @@ function App() {
           <MapPreview
             latitude={mapCenter.latitude}
             longitude={mapCenter.longitude}
-            label={best ? `${best.decision} · Yield ${best.predicted_yield_m3h.toFixed(2)} m³/h · GPI ${best.gpi.toFixed(1)}` : 'Current selection'}
+            label={markerLabel}
+            placeName={placeName || placeDetails}
             onMapClick={handleMapClick}
           />
 
@@ -319,18 +584,42 @@ function App() {
               <div className="muted">No prediction yet. Click the map or use your location to choose a point.</div>
             ) : (
               <>
+                <div className="placePanel">
+                  <div className="label">Detected place</div>
+                  <div className="placeName">{placeName || (lookingUpPlace ? 'Resolving place name…' : 'Place name unavailable')}</div>
+                  <div className="muted">{placeDetails || 'Map labels remain visible directly on the basemap.'}</div>
+                </div>
                 <div className="resultTop">
                   <div className={`badge ${decisionClass}`}>{best.decision}</div>
                   <div className="muted">
                     GPI <b>{best.gpi.toFixed(2)}</b> · Yield <b>{best.predicted_yield_m3h.toFixed(2)} m³/h</b> · SWL{' '}
                     <b>{best.predicted_static_water_level_m.toFixed(2)} m</b>
                   </div>
+                  <div className="muted">
+                    Coordinates: {best.latitude.toFixed(5)}, {best.longitude.toFixed(5)} · UTME <b>{best.utme.toFixed(0)}</b> · UTMN{' '}
+                    <b>{best.utmn.toFixed(0)}</b>
+                  </div>
                   <div className="muted">{best.recommendation}</div>
+                </div>
+                <div className="buttons compact">
+                  <button className="btn secondary" onClick={downloadResultsCsv}>
+                    Download CSV
+                  </button>
+                  <button className="btn secondary" onClick={downloadResultsReport}>
+                    Download report
+                  </button>
                 </div>
               </>
             )}
           </div>
         </section>
+
+        {results?.length ? (
+          <section className="card wide">
+            <h2>Visual analysis</h2>
+            <Charts results={results} />
+          </section>
+        ) : null}
       </main>
     </div>
   )

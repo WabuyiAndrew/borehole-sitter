@@ -116,6 +116,10 @@
     gap: 10px;
     margin-top: 10px;
   }
+
+  .buttons.compact {
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  }
   
   .btn {
     border: 1px solid rgba(47, 130, 109, 0.24);
@@ -133,6 +137,12 @@
     border-color: transparent;
     color: #f8fafc;
     box-shadow: 0 10px 30px rgba(15, 118, 110, 0.28);
+  }
+
+  .btn.secondary {
+    background: rgba(56, 189, 248, 0.1);
+    border-color: rgba(56, 189, 248, 0.32);
+    color: #dbeafe;
   }
   
   .btn:hover:not(:disabled) {
@@ -177,6 +187,22 @@
   .resultTop {
     display: grid;
     gap: 6px;
+  }
+
+  .placePanel {
+    display: grid;
+    gap: 4px;
+    margin-bottom: 12px;
+    padding: 12px;
+    border-radius: 14px;
+    border: 1px solid rgba(56, 189, 248, 0.18);
+    background: rgba(56, 189, 248, 0.08);
+  }
+
+  .placeName {
+    font-size: 1rem;
+    font-weight: 800;
+    color: #f8fafc;
   }
 
   .mapHint {
