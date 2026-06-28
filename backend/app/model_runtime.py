@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+from functools import lru_cache
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -8,6 +9,16 @@ import joblib
 import numpy as np
 import pandas as pd
 from pyproj import Transformer
+
+
+MODEL_UTM_ZONE = 36
+MODEL_UTM_NORTHERN = True
+MODEL_UTM_EPSG = 32636
+
+
+@lru_cache(maxsize=256)
+def _cached_transformer(from_epsg: int, to_epsg: int) -> Transformer:
+    return Transformer.from_crs(f"EPSG:{from_epsg}", f"EPSG:{to_epsg}", always_xy=True)
 
 
 @dataclass(frozen=True)
@@ -59,8 +70,8 @@ class AwojaModelRuntime:
             self.background_tree = None
 
         # Coordinate transforms
-        self._geo_to_utm36 = Transformer.from_crs("EPSG:4326", "EPSG:32636", always_xy=True)
-        self._utm36_to_geo = Transformer.from_crs("EPSG:32636", "EPSG:4326", always_xy=True)
+        self._geo_to_utm36 = _cached_transformer(4326, MODEL_UTM_EPSG)
+        self._utm36_to_geo = _cached_transformer(MODEL_UTM_EPSG, 4326)
 
     def info(self) -> ModelInfo:
         return ModelInfo(
@@ -76,9 +87,40 @@ class AwojaModelRuntime:
     # -----------------------
     # Coordinates
     # -----------------------
+    @staticmethod
+    def detect_utm_zone(longitude: float) -> int:
+        zone = int(math.floor((float(longitude) + 180.0) / 6.0) + 1)
+        return max(1, min(60, zone))
+
+    @staticmethod
+    def normalize_utm_zone(zone: int) -> int:
+        zone_value = int(zone)
+        if zone_value < 1 or zone_value > 60:
+            raise ValueError("UTM zone must be between 1 and 60")
+        return zone_value
+
+    @staticmethod
+    def utm_epsg(zone: int, northern: bool) -> int:
+        normalized_zone = AwojaModelRuntime.normalize_utm_zone(zone)
+        return int((32600 if northern else 32700) + normalized_zone)
+
+    def geo_to_utm(self, lon: float, lat: float, zone: Optional[int] = None, northern: Optional[bool] = None) -> Tuple[float, float, int, bool, int]:
+        normalized_zone = self.detect_utm_zone(lon) if zone is None else self.normalize_utm_zone(zone)
+        is_northern = bool(lat >= 0.0) if northern is None else bool(northern)
+        epsg = self.utm_epsg(normalized_zone, is_northern)
+        transformer = _cached_transformer(4326, epsg)
+        e, n = transformer.transform(lon, lat)
+        return float(e), float(n), normalized_zone, is_northern, epsg
+
     def geo_to_utm36(self, lon: float, lat: float) -> Tuple[float, float]:
         e, n = self._geo_to_utm36.transform(lon, lat)
         return float(e), float(n)
+
+    def utm_to_geo(self, utme: float, utmn: float, zone: int = MODEL_UTM_ZONE, northern: bool = MODEL_UTM_NORTHERN) -> Tuple[float, float]:
+        epsg = self.utm_epsg(zone, northern)
+        transformer = _cached_transformer(epsg, 4326)
+        lon, lat = transformer.transform(utme, utmn)
+        return float(lon), float(lat)
 
     def utm36_to_geo(self, utme: float, utmn: float) -> Tuple[float, float]:
         lon, lat = self._utm36_to_geo.transform(utme, utmn)
