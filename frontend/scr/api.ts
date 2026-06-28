@@ -4,6 +4,10 @@ export type PredictRequest =
       point_utm: { utme: number; utmn: number }
     }
   | {
+      source: 'manual'
+      point_geo: { longitude: number; latitude: number }
+    }
+  | {
       source: 'geolocation'
       point_geo: { longitude: number; latitude: number }
     }
