@@ -4,6 +4,10 @@ export type PredictRequest =
       point_utm: { utme: number; utmn: number }
     }
   | {
+      source: 'manual'
+      point_geo: { longitude: number; latitude: number }
+    }
+  | {
       source: 'geolocation'
       point_geo: { longitude: number; latitude: number }
     }
@@ -41,7 +45,7 @@ function resolveApiBaseUrl() {
   if (typeof window !== 'undefined') {
     const { protocol, hostname } = window.location
     if (protocol === 'capacitor:' || protocol === 'ionic:') {
-      return 'http://10.0.2.2:8000'
+      return DEFAULT_BACKEND_URL
     }
     if (hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1') {
       return 'http://localhost:8000'
@@ -85,13 +89,14 @@ async function fetchJson<T>(url: string, init: RequestInit, timeoutMs: number): 
     return (await res.json()) as T
   } catch (err) {
     if (err instanceof DOMException && err.name === 'AbortError') {
-      throw new Error(`The prediction service is taking too long to respond at ${url}. It may be waking up from a cold start.`)
+      throw new Error('The service is taking longer than expected to respond. Please wait a moment and try again.')
     }
 
     if (err instanceof TypeError) {
-      throw new Error(
-        `Unable to reach the prediction service at ${url}. Please make sure the backend is running, CORS is enabled for this app origin, and the API base URL is correct. (${err.message})`,
-      )
+      if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+        throw new Error('No internet connection detected. Check your network and try again.')
+      }
+      throw new Error('We could not reach the service right now. Check your internet connection and try again.')
     }
 
     throw err
