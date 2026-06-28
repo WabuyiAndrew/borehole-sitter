@@ -16,10 +16,35 @@ MODEL_PATH = os.path.abspath(MODEL_PATH)
 
 app = FastAPI(title="Awoja Borehole Siting API", version="0.1.0")
 
+
+def _parse_csv_env(name: str, default: str) -> List[str]:
+    return [item.strip() for item in os.getenv(name, default).split(",") if item.strip()]
+
+
+default_origins = ",".join(
+    [
+        "http://localhost",
+        "http://localhost:3000",
+        "http://localhost:4173",
+        "http://localhost:5173",
+        "http://127.0.0.1",
+        "http://127.0.0.1:3000",
+        "http://127.0.0.1:4173",
+        "http://127.0.0.1:5173",
+        "capacitor://localhost",
+        "ionic://localhost",
+    ]
+)
+allowed_origins = _parse_csv_env("CORS_ORIGINS", default_origins)
+allow_all_origins = os.getenv("CORS_ALLOW_ALL", "").strip().lower() in {"1", "true", "yes"}
+allow_origin_regex = os.getenv("CORS_ORIGIN_REGEX", r"https://.*\.onrender\.com")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[o.strip() for o in os.getenv("CORS_ORIGINS", "http://localhost:5173").split(",") if o.strip()],
-    allow_credentials=True,
+    allow_origins=["*"] if allow_all_origins else allowed_origins,
+    allow_origin_regex=None if allow_all_origins else allow_origin_regex,
+    # Wildcard origins cannot be combined with credentialed requests.
+    allow_credentials=not allow_all_origins,
     allow_methods=["*"],
     allow_headers=["*"],
 )

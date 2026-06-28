@@ -12,7 +12,7 @@ App name (branding): **BoreHole Sitter**
   - `POST /predict` (single point or batch points)
 - Frontend: React (Vite) app with:
   - Manual `UTME/UTMN` input
-  - `Use my location` (browser GPS → backend converts to UTM Zone 36N)
+  - `Use my location` (device GPS/browser geolocation → coordinates update immediately, then backend converts to UTM Zone 36N and returns prediction)
   - Result card: decision, GPI, yield, SWL, recommendation
   - Map preview using **MapTiler Satellite** (falls back to OpenStreetMap if no MapTiler key)
   - Charts (ECharts) when you run **batch mode** (2+ points)
@@ -29,6 +29,14 @@ App name (branding): **BoreHole Sitter**
    - `MODEL_PATH=./models/awoja_deployment_bundle.joblib uvicorn app.main:app --reload --port 8000`
 
 Backend will be available at `http://localhost:8000`.
+
+Recommended environment variables for deployed environments:
+
+- `CORS_ORIGINS=http://localhost,http://localhost:5173,http://127.0.0.1:5173,capacitor://localhost,ionic://localhost`
+- `CORS_ORIGIN_REGEX=https://.*\.onrender\.com`
+- `CORS_ALLOW_ALL=false`
+
+These allow local development, Capacitor mobile shells, and Render-hosted frontend origins to call the API without failing the browser preflight request.
 
 ## Run the frontend (React)
 
@@ -110,7 +118,24 @@ Tauri will output an installer / executable under:
 
 - The model bundle was exported with `scikit-learn==1.6.1`, so the backend pins that version to avoid compatibility issues.
 - Coordinate system: **UTM Zone 36N (EPSG:32636)**.
+- Render or Railway cold starts can delay the first prediction request; the frontend now warms the backend on load and shows a clearer timeout message when the API is still waking up.
 - If you want the UI labels to say `Suitable / Moderate / Not suitable` only (without Low/Medium/High), we can hide `suitability_class` and show only `decision`.
+
+## Functional requirements
+
+- The app shall allow users to enter `UTME` and `UTMN` manually and request a borehole suitability prediction.
+- The app shall allow users to use device location and immediately update the coordinate fields from the detected position before prediction completes.
+- The app shall allow users to click the map and update the selected coordinates for the next prediction.
+- The app shall show the best prediction result, including decision, GPI, predicted yield, predicted static water level, and recommendation.
+- The backend shall accept either UTM coordinates or geographic coordinates and return a normalized prediction response.
+
+## Non-functional requirements
+
+- The backend shall respond to browser and mobile app requests with valid CORS headers for approved origins, including deployed frontend domains and Capacitor origins.
+- The frontend shall surface backend, timeout, and connectivity failures with user-readable error messages instead of reporting every failure as a generic fetch issue.
+- The app shall request and use location permissions on supported mobile devices before attempting to access device position.
+- The first request to hosted infrastructure may be slower because of cold starts; the app should warm the service early and keep users informed while waiting.
+- The app shall keep coordinate selection and map state synchronized so the displayed point matches the last user action.
 
 ## Build APK + EXE online (GitHub Actions)
 
