@@ -61,6 +61,12 @@ export type ConvertCoordinatesResponse = {
   model: CoordinateReference
 }
 
+export type ReverseGeocodeResponse = {
+  title: string
+  full_label: string
+  resolved: boolean
+}
+
 const DEFAULT_BACKEND_URL = 'https://borehole-sitter.onrender.com'
 
 function resolveApiBaseUrl() {
@@ -83,6 +89,7 @@ const API_BASE_URL = resolveApiBaseUrl()
 const PREDICT_URL = `${API_BASE_URL}/predict`
 const HEALTH_URL = `${API_BASE_URL}/health`
 const CONVERT_COORDINATES_URL = `${API_BASE_URL}/convert-coordinates`
+const REVERSE_GEOCODE_URL = `${API_BASE_URL}/reverse-geocode`
 
 async function readErrorMessage(res: Response) {
   const contentType = res.headers.get('content-type') || ''
@@ -98,8 +105,16 @@ async function readErrorMessage(res: Response) {
 
 async function fetchJson<T>(url: string, init: RequestInit, timeoutMs: number, signal?: AbortSignal): Promise<T> {
   const controller = new AbortController()
-  const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs)
-  const abortFromCaller = () => controller.abort()
+  let timedOut = false
+  let abortedByCaller = false
+  const timeoutId = window.setTimeout(() => {
+    timedOut = true
+    controller.abort()
+  }, timeoutMs)
+  const abortFromCaller = () => {
+    abortedByCaller = true
+    controller.abort()
+  }
   signal?.addEventListener('abort', abortFromCaller)
 
   try {
@@ -116,6 +131,9 @@ async function fetchJson<T>(url: string, init: RequestInit, timeoutMs: number, s
     return (await res.json()) as T
   } catch (err) {
     if (err instanceof DOMException && err.name === 'AbortError') {
+      if (abortedByCaller && !timedOut) {
+        throw err
+      }
       throw new Error('The service is taking longer than expected to respond. Please wait a moment and try again.')
     }
 
@@ -168,6 +186,24 @@ export async function convertCoordinates(
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(req),
+    },
+    45000,
+    signal,
+  )
+}
+
+export async function reverseGeocode(
+  latitude: number,
+  longitude: number,
+  signal?: AbortSignal,
+): Promise<ReverseGeocodeResponse> {
+  const url = new URL(REVERSE_GEOCODE_URL)
+  url.searchParams.set('latitude', String(latitude))
+  url.searchParams.set('longitude', String(longitude))
+  return fetchJson<ReverseGeocodeResponse>(
+    url.toString(),
+    {
+      method: 'GET',
     },
     20000,
     signal,
