@@ -6,10 +6,10 @@ export function AuthPage(props: {
   mode: AuthMode
   busy: boolean
   error: string | null
-  onSubmit: (username: string, password: string) => void
+  onSubmit: (email: string, password: string) => void
   onModeChange: (mode: AuthMode) => void
 }) {
-  const [username, setUsername] = useState('')
+  const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
 
   const title = useMemo(() => (props.mode === 'login' ? 'Log in' : 'Sign up'), [props.mode])
@@ -18,6 +18,8 @@ export function AuthPage(props: {
     () => (props.mode === 'login' ? 'Need an account? Sign up' : 'Already have an account? Log in'),
     [props.mode],
   )
+  const isPasswordValid = password.length > 6
+  const isEmailValid = /^\S+@\S+\.\S+$/.test(email.trim())
 
   return (
     <div className="authShell">
@@ -25,16 +27,18 @@ export function AuthPage(props: {
         <div className="authIconRow">
           <img className="authIcon" src="/favicon.png" alt="DrillScout" />
         </div>
+        <div className="authAppName">DrillScout</div>
         <div className="authTitle">{title}</div>
         <div className="authFields">
           <label>
-            <div className="label">Username</div>
+            <div className="label">Email</div>
             <input
-              autoComplete="username"
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
-              placeholder="Username"
-              inputMode="text"
+              autoComplete="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="name@example.com"
+              inputMode="email"
+              type="email"
             />
           </label>
           <label>
@@ -48,12 +52,13 @@ export function AuthPage(props: {
             />
           </label>
         </div>
+        {password && !isPasswordValid ? <div className="hint">Password must be more than 6 characters.</div> : null}
         {props.error ? <div className="error">{props.error}</div> : null}
         <div className="buttons">
           <button
             className="btn primary"
-            disabled={props.busy || !username.trim() || !password}
-            onClick={() => props.onSubmit(username.trim(), password)}
+            disabled={props.busy || !isEmailValid || !isPasswordValid}
+            onClick={() => props.onSubmit(email.trim(), password)}
           >
             {props.busy ? 'Please wait…' : actionLabel}
           </button>
@@ -69,4 +74,3 @@ export function AuthPage(props: {
     </div>
   )
 }
-

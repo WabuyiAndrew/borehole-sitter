@@ -97,7 +97,18 @@ const TOKEN_KEY = 'drillscout_auth_token'
 async function readErrorMessage(res: Response) {
   const contentType = res.headers.get('content-type') || ''
   if (contentType.includes('application/json')) {
-    const data = (await res.json().catch(() => null)) as { detail?: string; message?: string } | null
+    const data = (await res.json().catch(() => null)) as
+      | { detail?: string | Array<{ msg?: string; loc?: Array<string | number> }>; message?: string }
+      | null
+    if (Array.isArray(data?.detail) && data.detail.length) {
+      return data.detail
+        .map((item) => {
+          const field = Array.isArray(item.loc) ? item.loc[item.loc.length - 1] : ''
+          const prefix = typeof field === 'string' && field ? `${field}: ` : ''
+          return `${prefix}${String(item.msg || 'Invalid value')}`
+        })
+        .join('. ')
+    }
     if (typeof data?.detail === 'string' && data.detail.trim()) return data.detail
     if (typeof data?.message === 'string' && data.message.trim()) return data.message
   }
@@ -177,29 +188,29 @@ export async function warmBackend() {
   }
 }
 
-export async function login(username: string, password: string) {
+export async function login(email: string, password: string) {
   const res = await fetchJson<AuthResponse>(
     AUTH_LOGIN_URL,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username, password }),
+      body: JSON.stringify({ email, password }),
     },
-    30000,
+    45000,
   )
   setAuthToken(res.access_token)
   return res
 }
 
-export async function signup(username: string, password: string) {
+export async function signup(email: string, password: string) {
   const res = await fetchJson<AuthResponse>(
     AUTH_SIGNUP_URL,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username, password }),
+      body: JSON.stringify({ email, password }),
     },
-    30000,
+    45000,
   )
   setAuthToken(res.access_token)
   return res
