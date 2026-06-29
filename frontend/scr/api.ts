@@ -66,6 +66,12 @@ export type AuthResponse = {
   token_type: 'bearer'
 }
 
+export type HealthResponse = {
+  ok: boolean
+  model_loaded: boolean
+  model_status?: 'ready' | 'loading' | 'starting' | 'error'
+}
+
 const DEFAULT_BACKEND_URL = 'https://borehole-sitter.onrender.com'
 
 function resolveApiBaseUrl() {
@@ -186,10 +192,9 @@ function buildAuthHeaders(headers: Record<string, string> = {}) {
 
 export async function warmBackend() {
   try {
-    await fetchJson<{ ok: boolean }>(HEALTH_URL, { method: 'GET' }, 45000)
-    return true
+    return await fetchJson<HealthResponse>(HEALTH_URL, { method: 'GET' }, 15000)
   } catch {
-    return false
+    return null
   }
 }
 
