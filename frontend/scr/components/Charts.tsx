@@ -11,6 +11,7 @@ function classCounts(results: PredictResult[]) {
 export function Charts({ results }: { results: PredictResult[] }) {
   const counts = classCounts(results)
   const resultLabels = results.map((_, index) => `Point ${index + 1}`)
+  const rotateLabels = results.length > 8
 
   const optionMetrics = {
     animation: false,
@@ -19,14 +20,15 @@ export function Charts({ results }: { results: PredictResult[] }) {
     xAxis: {
       type: 'category',
       data: resultLabels,
-      axisLabel: { color: '#cbd5e1' },
+      axisLabel: { color: '#cbd5e1', interval: 0, rotate: rotateLabels ? 35 : 0, margin: 14 },
+      axisTick: { alignWithLabel: true },
     },
     yAxis: {
       type: 'value',
       axisLabel: { color: '#cbd5e1' },
       splitLine: { lineStyle: { color: '#24324f' } },
     },
-    grid: { left: 45, right: 20, top: 30, bottom: 40 },
+    grid: { left: 45, right: 20, top: 30, bottom: rotateLabels ? 72 : 48, containLabel: true },
     series: [
       {
         name: 'GPI',

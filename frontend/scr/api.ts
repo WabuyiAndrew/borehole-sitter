@@ -61,6 +61,11 @@ export type ConvertCoordinatesResponse = {
   model: CoordinateReference
 }
 
+export type AuthResponse = {
+  access_token: string
+  token_type: 'bearer'
+}
+
 const DEFAULT_BACKEND_URL = 'https://borehole-sitter.onrender.com'
 
 function resolveApiBaseUrl() {
@@ -83,6 +88,11 @@ const API_BASE_URL = resolveApiBaseUrl()
 const PREDICT_URL = `${API_BASE_URL}/predict`
 const HEALTH_URL = `${API_BASE_URL}/health`
 const CONVERT_COORDINATES_URL = `${API_BASE_URL}/convert-coordinates`
+const AUTH_LOGIN_URL = `${API_BASE_URL}/auth/login`
+const AUTH_SIGNUP_URL = `${API_BASE_URL}/auth/signup`
+const REPORT_PDF_URL = `${API_BASE_URL}/report/pdf`
+
+const TOKEN_KEY = 'drillscout_auth_token'
 
 async function readErrorMessage(res: Response) {
   const contentType = res.headers.get('content-type') || ''
@@ -137,6 +147,27 @@ export function getApiBaseUrl() {
   return API_BASE_URL
 }
 
+export function getAuthToken() {
+  if (typeof window === 'undefined') return null
+  const token = window.localStorage.getItem(TOKEN_KEY)
+  return token && token.trim() ? token : null
+}
+
+export function setAuthToken(token: string | null) {
+  if (typeof window === 'undefined') return
+  if (!token) {
+    window.localStorage.removeItem(TOKEN_KEY)
+    return
+  }
+  window.localStorage.setItem(TOKEN_KEY, token)
+}
+
+function buildAuthHeaders(headers: Record<string, string> = {}) {
+  const token = getAuthToken()
+  if (!token) return headers
+  return { ...headers, Authorization: `Bearer ${token}` }
+}
+
 export async function warmBackend() {
   try {
     await fetchJson<{ ok: boolean }>(HEALTH_URL, { method: 'GET' }, 45000)
@@ -146,12 +177,40 @@ export async function warmBackend() {
   }
 }
 
+export async function login(username: string, password: string) {
+  const res = await fetchJson<AuthResponse>(
+    AUTH_LOGIN_URL,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password }),
+    },
+    30000,
+  )
+  setAuthToken(res.access_token)
+  return res
+}
+
+export async function signup(username: string, password: string) {
+  const res = await fetchJson<AuthResponse>(
+    AUTH_SIGNUP_URL,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password }),
+    },
+    30000,
+  )
+  setAuthToken(res.access_token)
+  return res
+}
+
 export async function predict(req: PredictRequest): Promise<PredictResponse> {
   return fetchJson<PredictResponse>(
     PREDICT_URL,
     {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: buildAuthHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify(req),
     },
     60000,
@@ -166,10 +225,30 @@ export async function convertCoordinates(
     CONVERT_COORDINATES_URL,
     {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: buildAuthHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify(req),
     },
-    20000,
+    45000,
     signal,
   )
+}
+
+export async function fetchReportPdf(payload: unknown) {
+  const controller = new AbortController()
+  const timeoutId = window.setTimeout(() => controller.abort(), 60000)
+  try {
+    const res = await fetch(REPORT_PDF_URL, {
+      method: 'POST',
+      headers: buildAuthHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify(payload),
+      signal: controller.signal,
+    })
+    if (!res.ok) {
+      const message = await readErrorMessage(res)
+      throw new Error(message)
+    }
+    return await res.blob()
+  } finally {
+    window.clearTimeout(timeoutId)
+  }
 }
