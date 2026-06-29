@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import threading
 from io import BytesIO
 from typing import Any, Dict, List, Literal, Optional
 
@@ -60,6 +61,9 @@ app.add_middleware(
 
 
 runtime: Optional[AwojaModelRuntime] = None
+runtime_loading = False
+runtime_error: Optional[str] = None
+runtime_lock = threading.Lock()
 
 
 class ClientInfo(BaseModel):
@@ -143,21 +147,60 @@ class PdfReportRequest(BaseModel):
     place_details: Optional[str] = None
 
 
+def _load_model_worker() -> None:
+    global runtime, runtime_loading, runtime_error
+    with runtime_lock:
+        if runtime is not None or runtime_loading:
+            return
+        runtime_loading = True
+        runtime_error = None
+
+    try:
+        if not os.path.exists(MODEL_PATH):
+            raise RuntimeError(f"MODEL_PATH not found: {MODEL_PATH}")
+        loaded_runtime = AwojaModelRuntime(MODEL_PATH)
+        with runtime_lock:
+            runtime = loaded_runtime
+    except Exception as exc:
+        with runtime_lock:
+            runtime_error = str(exc)
+        raise
+    finally:
+        with runtime_lock:
+            runtime_loading = False
+
+
+def _ensure_model_loading() -> None:
+    if runtime is not None or runtime_loading:
+        return
+    threading.Thread(target=_load_model_worker, name="model-loader", daemon=True).start()
+
+
+def _require_runtime() -> AwojaModelRuntime:
+    if runtime is not None:
+        return runtime
+    _ensure_model_loading()
+    if runtime_error:
+        raise HTTPException(status_code=503, detail=f"Model failed to load: {runtime_error}")
+    raise HTTPException(status_code=503, detail="Model is warming up. Please wait a moment and try again.")
+
+
 @app.on_event("startup")
-def _load_model() -> None:
-    global runtime
+def _startup() -> None:
     Base.metadata.create_all(bind=engine)
-    if not os.path.exists(MODEL_PATH):
-        raise RuntimeError(f"MODEL_PATH not found: {MODEL_PATH}")
-    runtime = AwojaModelRuntime(MODEL_PATH)
+    _ensure_model_loading()
 
 
 @app.get("/health")
 def health() -> Dict[str, Any]:
-    return {"ok": True, "model_loaded": runtime is not None}
+    return {
+        "ok": True,
+        "model_loaded": runtime is not None,
+        "model_status": "ready" if runtime is not None else "loading" if runtime_loading else "error" if runtime_error else "starting",
+    }
 
 
-@app.get("/")
+@app.api_route("/", methods=["GET", "HEAD"])
 def root() -> Dict[str, Any]:
     return {"ok": True, "service": "borehole-sitter-api"}
 
@@ -190,9 +233,8 @@ def auth_login(payload: AuthRequest, db: Session = Depends(get_db)) -> AuthRespo
 
 @app.get("/model-info")
 def model_info(_: User = Depends(get_current_user)) -> Dict[str, Any]:
-    if runtime is None:
-        raise HTTPException(status_code=503, detail="Model not loaded")
-    info = runtime.info()
+    loaded_runtime = _require_runtime()
+    info = loaded_runtime.info()
     return {
         "name": info.name,
         "created_at": info.created_at,
@@ -207,8 +249,7 @@ def model_info(_: User = Depends(get_current_user)) -> Dict[str, Any]:
 
 @app.post("/convert-coordinates", response_model=ConvertCoordinatesResponse)
 def convert_coordinates(req: ConvertCoordinatesRequest, _: User = Depends(get_current_user)) -> ConvertCoordinatesResponse:
-    if runtime is None:
-        raise HTTPException(status_code=503, detail="Model not loaded")
+    loaded_runtime = _require_runtime()
 
     has_geo = req.point_geo is not None
     has_utm = req.point_utm is not None
@@ -216,11 +257,11 @@ def convert_coordinates(req: ConvertCoordinatesRequest, _: User = Depends(get_cu
         raise HTTPException(status_code=400, detail="Provide exactly one of point_geo or point_utm")
 
     if req.point_geo is not None:
-        converted = runtime.convert_from_geo(req.point_geo.longitude, req.point_geo.latitude)
+        converted = loaded_runtime.convert_from_geo(req.point_geo.longitude, req.point_geo.latitude)
         return ConvertCoordinatesResponse(input_mode="geo", **converted)
 
     assert req.point_utm is not None
-    converted = runtime.convert_from_utm(
+    converted = loaded_runtime.convert_from_utm(
         req.point_utm.utme,
         req.point_utm.utmn,
         zone=req.point_utm.zone,
@@ -231,8 +272,7 @@ def convert_coordinates(req: ConvertCoordinatesRequest, _: User = Depends(get_cu
 
 @app.post("/predict", response_model=PredictResponse)
 def predict(req: PredictRequest, _: User = Depends(get_current_user)) -> PredictResponse:
-    if runtime is None:
-        raise HTTPException(status_code=503, detail="Model not loaded")
+    loaded_runtime = _require_runtime()
 
     warnings: List[str] = []
 
@@ -240,22 +280,22 @@ def predict(req: PredictRequest, _: User = Depends(get_current_user)) -> Predict
     if req.points_utm:
         if len(req.points_utm) > 500:
             raise HTTPException(status_code=400, detail="Too many points (max 500)")
-        results = [runtime.predict_one_utm(p.utme, p.utmn) for p in req.points_utm]
+        results = [loaded_runtime.predict_one_utm(p.utme, p.utmn) for p in req.points_utm]
         results = sorted(results, key=lambda r: float(r.get("gpi", 0.0)), reverse=True)
         best = results[0] if results else {}
-        return PredictResponse(best=best, results=results, warnings=warnings, bundle_version=str(runtime.bundle.get("model_names", "awoja")))
+        return PredictResponse(best=best, results=results, warnings=warnings, bundle_version=str(loaded_runtime.bundle.get("model_names", "awoja")))
 
     # Single point mode: accept either UTM or Geo
     utm = req.point_utm
     if utm is None and req.point_geo is not None:
-        e, n = runtime.geo_to_utm36(req.point_geo.longitude, req.point_geo.latitude)
+        e, n = loaded_runtime.geo_to_utm36(req.point_geo.longitude, req.point_geo.latitude)
         utm = PointUTM(utme=e, utmn=n)
 
     if utm is None:
         raise HTTPException(status_code=400, detail="Provide point_utm or point_geo")
 
-    result = runtime.predict_one_utm(utm.utme, utm.utmn)
-    return PredictResponse(best=result, results=[result], warnings=warnings, bundle_version=str(runtime.bundle.get("model_names", "awoja")))
+    result = loaded_runtime.predict_one_utm(utm.utme, utm.utmn)
+    return PredictResponse(best=result, results=[result], warnings=warnings, bundle_version=str(loaded_runtime.bundle.get("model_names", "awoja")))
 
 
 @app.post("/report/pdf")

@@ -304,8 +304,8 @@ function App() {
   const [coordinateMode, setCoordinateMode] = useState<CoordinateMode>('latlon')
   const [utme, setUtme] = useState('')
   const [utmn, setUtmn] = useState('')
-  const [latitudeInput, setLatitudeInput] = useState(String(DEFAULT_LOCATION.latitude))
-  const [longitudeInput, setLongitudeInput] = useState(String(DEFAULT_LOCATION.longitude))
+  const [latitudeInput, setLatitudeInput] = useState('')
+  const [longitudeInput, setLongitudeInput] = useState('')
   const [batchInput, setBatchInput] = useState(DEFAULT_BATCH_INPUT)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -318,6 +318,7 @@ function App() {
   const [placeName, setPlaceName] = useState<string | null>(null)
   const [placeDetails, setPlaceDetails] = useState<string | null>(null)
   const [lookingUpPlace, setLookingUpPlace] = useState(false)
+  const [manualInteraction, setManualInteraction] = useState(false)
 
   function formatRuntimeError(err: unknown) {
     if (typeof navigator !== 'undefined' && navigator.onLine === false) {
@@ -359,7 +360,7 @@ function App() {
       return 'Location services are not available on this device.'
     }
 
-    if (/Model not loaded|503|502|500/i.test(message)) {
+    if (/Model not loaded|Model is warming up|503|502|500/i.test(message)) {
       return 'The service is temporarily unavailable. Please try again shortly.'
     }
 
@@ -399,24 +400,6 @@ function App() {
     writeAuthToken(null)
     setToken(null)
     resetSelectionState('Signed out')
-  }
-
-  if (!token) {
-    return (
-      <AuthPage
-        key={authMode}
-        mode={authMode}
-        busy={authBusy}
-        error={authError}
-        message={authMessage}
-        onSubmit={submitAuth}
-        onModeChange={(mode) => {
-          setAuthMode(mode)
-          setAuthError(null)
-          setAuthMessage(null)
-        }}
-      />
-    )
   }
 
   const best = useMemo(() => (results && results.length ? results[0] : null), [results])
@@ -487,6 +470,7 @@ function App() {
   }, [coordinateMode, conversion])
 
   useEffect(() => {
+    if (!token) return
     let active = true
 
     void warmBackend().then((ok) => {
@@ -497,19 +481,23 @@ function App() {
     return () => {
       active = false
     }
-  }, [])
+  }, [token])
 
   useEffect(() => {
-    if (!manualDraft.request) {
+    if (!token || !manualInteraction || !manualDraft.request) {
       setConversion(null)
       setConversionError(null)
       setConverting(false)
       if (coordinateMode === 'latlon') {
-        setUtme('')
-        setUtmn('')
+        if (!manualInteraction) {
+          setUtme('')
+          setUtmn('')
+        }
       } else {
-        setLatitudeInput('')
-        setLongitudeInput('')
+        if (!manualInteraction) {
+          setLatitudeInput('')
+          setLongitudeInput('')
+        }
       }
       return
     }
@@ -546,10 +534,10 @@ function App() {
       window.clearTimeout(timeoutId)
       controller.abort()
     }
-  }, [coordinateMode, manualDraft.request])
+  }, [coordinateMode, manualDraft.request, manualInteraction, token])
 
   useEffect(() => {
-    if (!activePoint) {
+    if (!token || !manualInteraction || !activePoint) {
       setPlaceName(null)
       setPlaceDetails(null)
       setLookingUpPlace(false)
@@ -583,7 +571,7 @@ function App() {
     return () => {
       controller.abort()
     }
-  }, [activePoint])
+  }, [activePoint, manualInteraction, token])
 
   function resetSelectionState(summary: string) {
     setPlaceName(null)
@@ -605,6 +593,7 @@ function App() {
   }
 
   function switchCoordinateMode(nextMode: CoordinateMode) {
+    setManualInteraction(true)
     if (conversion) {
       syncInputsFromConversion(conversion)
     }
@@ -791,6 +780,7 @@ function App() {
   }
 
   function handleMapClick(latitude: number, longitude: number) {
+    setManualInteraction(true)
     setCoordinateMode('latlon')
     setLatitudeInput(latitude.toFixed(5))
     setLongitudeInput(longitude.toFixed(5))
@@ -804,6 +794,24 @@ function App() {
     setError(null)
     setConversionError(null)
     setStatus('ready')
+  }
+
+  if (!token) {
+    return (
+      <AuthPage
+        key={authMode}
+        mode={authMode}
+        busy={authBusy}
+        error={authError}
+        message={authMessage}
+        onSubmit={submitAuth}
+        onModeChange={(mode) => {
+          setAuthMode(mode)
+          setAuthError(null)
+          setAuthMessage(null)
+        }}
+      />
+    )
   }
 
   return (
@@ -851,6 +859,7 @@ function App() {
                 <input
                   value={latitudeInput}
                   onChange={(e) => {
+                    setManualInteraction(true)
                     setLatitudeInput(e.target.value)
                     resetSelectionState('Latitude updated manually.')
                   }}
@@ -863,6 +872,7 @@ function App() {
                 <input
                   value={longitudeInput}
                   onChange={(e) => {
+                    setManualInteraction(true)
                     setLongitudeInput(e.target.value)
                     resetSelectionState('Longitude updated manually.')
                   }}
@@ -878,6 +888,7 @@ function App() {
                 <input
                   value={utme}
                   onChange={(e) => {
+                    setManualInteraction(true)
                     setUtme(e.target.value)
                     resetSelectionState('UTME updated manually.')
                   }}
@@ -890,6 +901,7 @@ function App() {
                 <input
                   value={utmn}
                   onChange={(e) => {
+                    setManualInteraction(true)
                     setUtmn(e.target.value)
                     resetSelectionState('UTMN updated manually.')
                   }}
