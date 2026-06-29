@@ -1,13 +1,22 @@
 from __future__ import annotations
 
 import os
+from io import BytesIO
 from typing import Any, Dict, List, Literal, Optional
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
+from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
 
+from .auth import create_access_token, get_current_user, get_db, hash_password, verify_password
+from .db import engine
+from .models import Base, User
 from .model_runtime import AwojaModelRuntime, MODEL_UTM_NORTHERN, MODEL_UTM_ZONE
+from .pdf_report import build_pdf_report
 
 
 MODEL_PATH = os.getenv("MODEL_PATH", os.path.join(os.path.dirname(__file__), "..", "models", "awoja_deployment_bundle.joblib"))
@@ -115,9 +124,29 @@ class ConvertCoordinatesResponse(BaseModel):
     model: CoordinateReference
 
 
+class AuthRequest(BaseModel):
+    username: str = Field(..., min_length=3, max_length=120)
+    password: str = Field(..., min_length=6, max_length=256)
+
+
+class AuthResponse(BaseModel):
+    access_token: str
+    token_type: Literal["bearer"] = "bearer"
+
+
+class PdfReportRequest(BaseModel):
+    point_geo: PointGeo
+    best: Dict[str, Any]
+    results: List[Dict[str, Any]]
+    title: Optional[str] = None
+    place_name: Optional[str] = None
+    place_details: Optional[str] = None
+
+
 @app.on_event("startup")
 def _load_model() -> None:
     global runtime
+    Base.metadata.create_all(bind=engine)
     if not os.path.exists(MODEL_PATH):
         raise RuntimeError(f"MODEL_PATH not found: {MODEL_PATH}")
     runtime = AwojaModelRuntime(MODEL_PATH)
@@ -128,8 +157,34 @@ def health() -> Dict[str, Any]:
     return {"ok": True, "model_loaded": runtime is not None}
 
 
+@app.post("/auth/signup", response_model=AuthResponse)
+def auth_signup(payload: AuthRequest, db: Session = Depends(get_db)) -> AuthResponse:
+    username = payload.username.strip()
+    if not username:
+        raise HTTPException(status_code=400, detail="Username is required")
+    user = User(username=username, password_hash=hash_password(payload.password))
+    db.add(user)
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="Username already exists")
+    token = create_access_token(user.username)
+    return AuthResponse(access_token=token)
+
+
+@app.post("/auth/login", response_model=AuthResponse)
+def auth_login(payload: AuthRequest, db: Session = Depends(get_db)) -> AuthResponse:
+    username = payload.username.strip()
+    user = db.execute(select(User).where(User.username == username)).scalars().first()
+    if user is None or not verify_password(payload.password, user.password_hash):
+        raise HTTPException(status_code=401, detail="Invalid username or password")
+    token = create_access_token(user.username)
+    return AuthResponse(access_token=token)
+
+
 @app.get("/model-info")
-def model_info() -> Dict[str, Any]:
+def model_info(_: User = Depends(get_current_user)) -> Dict[str, Any]:
     if runtime is None:
         raise HTTPException(status_code=503, detail="Model not loaded")
     info = runtime.info()
@@ -146,7 +201,7 @@ def model_info() -> Dict[str, Any]:
 
 
 @app.post("/convert-coordinates", response_model=ConvertCoordinatesResponse)
-def convert_coordinates(req: ConvertCoordinatesRequest) -> ConvertCoordinatesResponse:
+def convert_coordinates(req: ConvertCoordinatesRequest, _: User = Depends(get_current_user)) -> ConvertCoordinatesResponse:
     if runtime is None:
         raise HTTPException(status_code=503, detail="Model not loaded")
 
@@ -170,7 +225,7 @@ def convert_coordinates(req: ConvertCoordinatesRequest) -> ConvertCoordinatesRes
 
 
 @app.post("/predict", response_model=PredictResponse)
-def predict(req: PredictRequest) -> PredictResponse:
+def predict(req: PredictRequest, _: User = Depends(get_current_user)) -> PredictResponse:
     if runtime is None:
         raise HTTPException(status_code=503, detail="Model not loaded")
 
@@ -196,3 +251,20 @@ def predict(req: PredictRequest) -> PredictResponse:
 
     result = runtime.predict_one_utm(utm.utme, utm.utmn)
     return PredictResponse(best=result, results=[result], warnings=warnings, bundle_version=str(runtime.bundle.get("model_names", "awoja")))
+
+
+@app.post("/report/pdf")
+def report_pdf(req: PdfReportRequest, _: User = Depends(get_current_user)) -> StreamingResponse:
+    pdf_bytes = build_pdf_report(
+        title=req.title or "DrillScout report",
+        point=(req.point_geo.latitude, req.point_geo.longitude),
+        best=req.best,
+        results=req.results,
+        place_name=req.place_name,
+        place_details=req.place_details,
+    )
+    return StreamingResponse(
+        BytesIO(pdf_bytes),
+        media_type="application/pdf",
+        headers={"Content-Disposition": 'attachment; filename="drillscout-report.pdf"'},
+    )

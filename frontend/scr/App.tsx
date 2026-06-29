@@ -2,13 +2,18 @@ import './App.css'
 import { useEffect, useMemo, useState } from 'react'
 import {
   convertCoordinates,
-  getApiBaseUrl,
+  fetchReportPdf,
+  getAuthToken as readAuthToken,
+  login as apiLogin,
   predict,
+  setAuthToken as writeAuthToken,
+  signup as apiSignup,
   type ConvertCoordinatesRequest,
   type ConvertCoordinatesResponse,
   type PredictResult,
   warmBackend,
 } from './api'
+import { AuthPage, type AuthMode } from './components/AuthPage'
 import { Charts } from './components/Charts'
 import { MapPreview } from './components/MapPreview'
 
@@ -238,6 +243,10 @@ function escapeCsvValue(value: string | number) {
 
 async function saveTextFile(filename: string, content: string, mimeType: string) {
   const blob = new Blob([content], { type: mimeType })
+  await saveBlobFile(filename, blob, mimeType)
+}
+
+async function saveBlobFile(filename: string, blob: Blob, mimeType: string) {
   const file = new File([blob], filename, { type: mimeType })
   const pickerWindow = window as WindowWithFilePicker
   const extension = filename.includes('.') ? `.${filename.split('.').pop() || 'txt'}` : '.txt'
@@ -287,6 +296,10 @@ async function saveTextFile(filename: string, content: string, mimeType: string)
 }
 
 function App() {
+  const [token, setToken] = useState(() => readAuthToken())
+  const [authMode, setAuthMode] = useState<AuthMode>('login')
+  const [authBusy, setAuthBusy] = useState(false)
+  const [authError, setAuthError] = useState<string | null>(null)
   const [coordinateMode, setCoordinateMode] = useState<CoordinateMode>('latlon')
   const [utme, setUtme] = useState('')
   const [utmn, setUtmn] = useState('')
@@ -359,6 +372,44 @@ function App() {
     return 'Something went wrong while processing your request. Please try again.'
   }
 
+  async function submitAuth(username: string, password: string) {
+    setAuthBusy(true)
+    setAuthError(null)
+    try {
+      if (authMode === 'login') {
+        await apiLogin(username, password)
+      } else {
+        await apiSignup(username, password)
+      }
+      setToken(readAuthToken())
+    } catch (err) {
+      setAuthError(formatRuntimeError(err))
+    } finally {
+      setAuthBusy(false)
+    }
+  }
+
+  function logout() {
+    writeAuthToken(null)
+    setToken(null)
+    resetSelectionState('Signed out')
+  }
+
+  if (!token) {
+    return (
+      <AuthPage
+        mode={authMode}
+        busy={authBusy}
+        error={authError}
+        onSubmit={submitAuth}
+        onModeChange={(mode) => {
+          setAuthMode(mode)
+          setAuthError(null)
+        }}
+      />
+    )
+  }
+
   const best = useMemo(() => (results && results.length ? results[0] : null), [results])
   const latLonDraft = useMemo(
     () => deriveManualCoordinateRequest('latlon', '', '', latitudeInput, longitudeInput),
@@ -413,17 +464,16 @@ function App() {
     const authoritativeHemisphere = conversion.authoritative.northern ? 'N' : 'S'
     const modelHemisphere = conversion.model.northern ? 'N' : 'S'
     if (coordinateMode === 'latlon') {
-      const authoritativeText =
-        `Backend authoritative conversion: Zone ${conversion.authoritative.zone}${authoritativeHemisphere} ` +
-        `UTME ${conversion.authoritative.utme.toFixed(2)} and UTMN ${conversion.authoritative.utmn.toFixed(2)}.`
-      const modelText =
-        `Model input: Zone ${conversion.model.zone}${modelHemisphere} ` +
-        `UTME ${conversion.model.utme.toFixed(2)} and UTMN ${conversion.model.utmn.toFixed(2)}.`
-      return `${authoritativeText} ${modelText}`
+      return (
+        `UTM: Zone ${conversion.authoritative.zone}${authoritativeHemisphere} ` +
+        `E ${conversion.authoritative.utme.toFixed(0)} N ${conversion.authoritative.utmn.toFixed(0)} · ` +
+        `Model: Zone ${conversion.model.zone}${modelHemisphere} ` +
+        `E ${conversion.model.utme.toFixed(0)} N ${conversion.model.utmn.toFixed(0)}`
+      )
     }
     return (
-      `Backend-confirmed location: ${conversion.authoritative.latitude.toFixed(5)}, ${conversion.authoritative.longitude.toFixed(5)}. ` +
-      `Model input remains Zone ${conversion.model.zone}${modelHemisphere}.`
+      `Lat/Lon: ${conversion.authoritative.latitude.toFixed(5)}, ${conversion.authoritative.longitude.toFixed(5)} · ` +
+      `Model: Zone ${conversion.model.zone}${modelHemisphere} E ${conversion.model.utme.toFixed(0)} N ${conversion.model.utmn.toFixed(0)}`
     )
   }, [coordinateMode, conversion])
 
@@ -596,36 +646,19 @@ function App() {
     }
   }
 
-  async function downloadResultsReport() {
-    if (!results?.length || !best) return
-
-    const lines = [
-      'DrillScout Findings Report',
-      `Generated: ${new Date().toISOString()}`,
-      `Place: ${placeDetails || placeName || 'Not resolved'}`,
-      `API: ${getApiBaseUrl()}`,
-      '',
-      'Best candidate',
-      `Decision: ${best.decision}`,
-      `GPI: ${best.gpi.toFixed(2)}`,
-      `Predicted yield: ${best.predicted_yield_m3h.toFixed(2)} m³/h`,
-      `Predicted SWL: ${best.predicted_static_water_level_m.toFixed(2)} m`,
-      `Model coordinates: UTME ${best.utme.toFixed(2)}, UTMN ${best.utmn.toFixed(2)}`,
-      `Latitude/Longitude: ${best.latitude.toFixed(5)}, ${best.longitude.toFixed(5)}`,
-      conversion
-        ? `Authoritative UTM: Zone ${conversion.authoritative.zone}${conversion.authoritative.northern ? 'N' : 'S'} · UTME ${conversion.authoritative.utme.toFixed(2)} · UTMN ${conversion.authoritative.utmn.toFixed(2)}`
-        : 'Authoritative UTM: Not available',
-      `Recommendation: ${best.recommendation}`,
-      '',
-      'All evaluated points',
-      ...results.map(
-        (result, index) =>
-          `${index + 1}. ${result.decision} | GPI ${result.gpi.toFixed(2)} | Yield ${result.predicted_yield_m3h.toFixed(2)} m³/h | SWL ${result.predicted_static_water_level_m.toFixed(2)} m | UTME ${result.utme.toFixed(2)} | UTMN ${result.utmn.toFixed(2)}`,
-      ),
-    ]
-
+  async function downloadResultsPdf() {
+    if (!results?.length || !best || !activePoint) return
+    setError(null)
     try {
-      await saveTextFile('drillscout-findings-report.txt', lines.join('\n'), 'text/plain;charset=utf-8')
+      const blob = await fetchReportPdf({
+        title: 'DrillScout report',
+        point_geo: { latitude: activePoint.latitude, longitude: activePoint.longitude },
+        best,
+        results,
+        place_name: placeName,
+        place_details: placeDetails,
+      })
+      await saveBlobFile('drillscout-report.pdf', blob, 'application/pdf')
     } catch (err) {
       setError(formatRuntimeError(err))
     }
@@ -772,7 +805,12 @@ function App() {
             <div className="title">DrillScout</div>
             <div className="subtitle">Predict the best borehole siting location from coordinates or your current position.</div>
           </div>
-          <div className={`status ${status}`}>{statusLabel}</div>
+          <div className="heroActions">
+            <div className={`status ${status}`}>{statusLabel}</div>
+            <button className="btn" type="button" onClick={logout}>
+              Sign out
+            </button>
+          </div>
         </div>
       </header>
 
@@ -867,11 +905,11 @@ function App() {
           {!error && !manualDraft.error && conversionError ? <div className="error">{conversionError}</div> : null}
           <p className="hint">
             {coordinateMode === 'latlon'
-              ? 'Enter latitude and longitude in decimal degrees. The backend returns authoritative converted coordinates and the model-aligned UTM input.'
-              : 'Enter UTME and UTMN in meters for the model coordinate system (Zone 36N), or switch to latitude/longitude for general place entry.'}
+              ? 'Enter latitude and longitude.'
+              : 'Enter UTME and UTMN.'}
           </p>
-          <p className="hint">Click the map to choose a point and automatically fill both coordinate formats.</p>
-          <p className="hint">{locationSummary || conversionHint || (converting ? 'Resolving coordinates with the backend…' : 'Choose a point to begin.')}</p>
+          <p className="hint">Tap the map to pick a point.</p>
+          <p className="hint">{locationSummary || conversionHint || (converting ? 'Resolving coordinates…' : 'Choose a point to begin.')}</p>
 
           <details className="details">
             <summary>Batch mode, charts, and exports</summary>
@@ -930,8 +968,8 @@ function App() {
                   <button className="btn secondary" onClick={() => void downloadResultsCsv()}>
                     Download CSV
                   </button>
-                  <button className="btn secondary" onClick={() => void downloadResultsReport()}>
-                    Download report
+                  <button className="btn secondary" onClick={() => void downloadResultsPdf()}>
+                    Download PDF
                   </button>
                 </div>
               </>
