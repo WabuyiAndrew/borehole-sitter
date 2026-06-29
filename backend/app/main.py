@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Literal, Optional
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import AliasChoices, BaseModel, EmailStr, Field
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -125,8 +125,8 @@ class ConvertCoordinatesResponse(BaseModel):
 
 
 class AuthRequest(BaseModel):
-    username: str = Field(..., min_length=3, max_length=120)
-    password: str = Field(..., min_length=6, max_length=256)
+    email: EmailStr = Field(..., validation_alias=AliasChoices("email", "username"))
+    password: str = Field(..., min_length=7, max_length=256)
 
 
 class AuthResponse(BaseModel):
@@ -157,28 +157,33 @@ def health() -> Dict[str, Any]:
     return {"ok": True, "model_loaded": runtime is not None}
 
 
+@app.get("/")
+def root() -> Dict[str, Any]:
+    return {"ok": True, "service": "borehole-sitter-api"}
+
+
 @app.post("/auth/signup", response_model=AuthResponse)
 def auth_signup(payload: AuthRequest, db: Session = Depends(get_db)) -> AuthResponse:
-    username = payload.username.strip()
+    username = str(payload.email).strip().lower()
     if not username:
-        raise HTTPException(status_code=400, detail="Username is required")
+        raise HTTPException(status_code=400, detail="Email is required")
     user = User(username=username, password_hash=hash_password(payload.password))
     db.add(user)
     try:
         db.commit()
     except IntegrityError:
         db.rollback()
-        raise HTTPException(status_code=409, detail="Username already exists")
+        raise HTTPException(status_code=409, detail="Email already exists")
     token = create_access_token(user.username)
     return AuthResponse(access_token=token)
 
 
 @app.post("/auth/login", response_model=AuthResponse)
 def auth_login(payload: AuthRequest, db: Session = Depends(get_db)) -> AuthResponse:
-    username = payload.username.strip()
+    username = str(payload.email).strip().lower()
     user = db.execute(select(User).where(User.username == username)).scalars().first()
     if user is None or not verify_password(payload.password, user.password_hash):
-        raise HTTPException(status_code=401, detail="Invalid username or password")
+        raise HTTPException(status_code=401, detail="Invalid email or password")
     token = create_access_token(user.username)
     return AuthResponse(access_token=token)
 
