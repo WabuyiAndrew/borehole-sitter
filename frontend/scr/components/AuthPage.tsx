@@ -6,6 +6,7 @@ export function AuthPage(props: {
   mode: AuthMode
   busy: boolean
   error: string | null
+  message: string | null
   onSubmit: (email: string, password: string) => void
   onModeChange: (mode: AuthMode) => void
 }) {
@@ -53,6 +54,7 @@ export function AuthPage(props: {
           </label>
         </div>
         {password && !isPasswordValid ? <div className="hint">Password must be more than 6 characters.</div> : null}
+        {props.message ? <div className="success">{props.message}</div> : null}
         {props.error ? <div className="error">{props.error}</div> : null}
         <div className="buttons">
           <button
