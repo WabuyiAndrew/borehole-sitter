@@ -93,6 +93,7 @@ const AUTH_SIGNUP_URL = `${API_BASE_URL}/auth/signup`
 const REPORT_PDF_URL = `${API_BASE_URL}/report/pdf`
 
 const TOKEN_KEY = 'drillscout_auth_token'
+const SESSION_KEY = 'drillscout_auth_session'
 
 async function readErrorMessage(res: Response) {
   const contentType = res.headers.get('content-type') || ''
@@ -160,6 +161,8 @@ export function getApiBaseUrl() {
 
 export function getAuthToken() {
   if (typeof window === 'undefined') return null
+  const session = window.localStorage.getItem(SESSION_KEY)
+  if (session !== 'logged_in') return null
   const token = window.localStorage.getItem(TOKEN_KEY)
   return token && token.trim() ? token : null
 }
@@ -168,9 +171,11 @@ export function setAuthToken(token: string | null) {
   if (typeof window === 'undefined') return
   if (!token) {
     window.localStorage.removeItem(TOKEN_KEY)
+    window.localStorage.removeItem(SESSION_KEY)
     return
   }
   window.localStorage.setItem(TOKEN_KEY, token)
+  window.localStorage.setItem(SESSION_KEY, 'logged_in')
 }
 
 function buildAuthHeaders(headers: Record<string, string> = {}) {
@@ -203,7 +208,7 @@ export async function login(email: string, password: string) {
 }
 
 export async function signup(email: string, password: string) {
-  const res = await fetchJson<AuthResponse>(
+  return fetchJson<AuthResponse>(
     AUTH_SIGNUP_URL,
     {
       method: 'POST',
@@ -212,8 +217,6 @@ export async function signup(email: string, password: string) {
     },
     45000,
   )
-  setAuthToken(res.access_token)
-  return res
 }
 
 export async function predict(req: PredictRequest): Promise<PredictResponse> {

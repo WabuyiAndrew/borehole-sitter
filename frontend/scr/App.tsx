@@ -300,6 +300,7 @@ function App() {
   const [authMode, setAuthMode] = useState<AuthMode>('login')
   const [authBusy, setAuthBusy] = useState(false)
   const [authError, setAuthError] = useState<string | null>(null)
+  const [authMessage, setAuthMessage] = useState<string | null>(null)
   const [coordinateMode, setCoordinateMode] = useState<CoordinateMode>('latlon')
   const [utme, setUtme] = useState('')
   const [utmn, setUtmn] = useState('')
@@ -375,13 +376,18 @@ function App() {
   async function submitAuth(username: string, password: string) {
     setAuthBusy(true)
     setAuthError(null)
+    setAuthMessage(null)
     try {
       if (authMode === 'login') {
         await apiLogin(username, password)
-      } else {
-        await apiSignup(username, password)
+        setToken(readAuthToken())
+        return
       }
-      setToken(readAuthToken())
+      await apiSignup(username, password)
+      writeAuthToken(null)
+      setToken(null)
+      setAuthMode('login')
+      setAuthMessage('Account created successfully. Log in to continue.')
     } catch (err) {
       setAuthError(formatRuntimeError(err))
     } finally {
@@ -398,13 +404,16 @@ function App() {
   if (!token) {
     return (
       <AuthPage
+        key={authMode}
         mode={authMode}
         busy={authBusy}
         error={authError}
+        message={authMessage}
         onSubmit={submitAuth}
         onModeChange={(mode) => {
           setAuthMode(mode)
           setAuthError(null)
+          setAuthMessage(null)
         }}
       />
     )
