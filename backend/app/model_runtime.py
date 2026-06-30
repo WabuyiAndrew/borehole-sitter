@@ -14,6 +14,27 @@ from pyproj import Transformer
 MODEL_UTM_ZONE = 36
 MODEL_UTM_NORTHERN = True
 MODEL_UTM_EPSG = 32636
+SPATIAL_INTERPOLATION_K = 6
+SPATIAL_DISTANCE_FLOOR_METERS = 1.0
+BACKGROUND_INTERPOLATED_COLUMNS = (
+    "Elevation",
+    "Slope_Value",
+    "slope",
+    "Slope",
+    "MODFLOW_Head",
+    "K",
+    "AverageRainfall",
+    "Average_Rainfall",
+    "Rainfall",
+    "Distance_To_Waterbody",
+    "Distance_to_water",
+    "NDVI",
+    "ndvi",
+    "Total_Drilling_Depth",
+    "Drilling_Depth",
+    "Total_Casing_Depth",
+    "Casing_Depth",
+)
 
 
 @lru_cache(maxsize=256)
@@ -60,6 +81,9 @@ class AwojaModelRuntime:
         self.background_df["UTMN"] = pd.to_numeric(self.background_df["UTMN"], errors="coerce")
         self.background_df = self.background_df.dropna(subset=["UTME", "UTMN"]).reset_index(drop=True)
         self.background_xy = self.background_df[["UTME", "UTMN"]].to_numpy(dtype=float)
+        self.interpolated_background_columns = [
+            col for col in BACKGROUND_INTERPOLATED_COLUMNS if col in self.background_df.columns
+        ]
 
         # Fast nearest-neighbour lookup if SciPy is available (it is in requirements)
         try:
@@ -272,6 +296,49 @@ class AwojaModelRuntime:
             distance = float(distances[idx])
         return self.background_df.iloc[int(idx)].copy(), float(distance)
 
+    def _nearest_background_neighbors(self, utme: float, utmn: float, k: int = SPATIAL_INTERPOLATION_K) -> Tuple[np.ndarray, np.ndarray]:
+        point = np.array([float(utme), float(utmn)], dtype=float)
+        neighbors = max(1, min(int(k), len(self.background_df)))
+
+        if self.background_tree is not None:
+            distances, indices = self.background_tree.query(point, k=neighbors)
+        else:
+            all_distances = np.sqrt(((self.background_xy - point) ** 2).sum(axis=1))
+            indices = np.argsort(all_distances)[:neighbors]
+            distances = all_distances[indices]
+
+        distance_array = np.atleast_1d(np.asarray(distances, dtype=float))
+        index_array = np.atleast_1d(np.asarray(indices, dtype=int))
+        order = np.argsort(distance_array)
+        return index_array[order], distance_array[order]
+
+    def _interpolated_background_values(self, utme: float, utmn: float) -> Tuple[Dict[str, Any], float]:
+        indices, distances = self._nearest_background_neighbors(utme, utmn)
+        nearest_row = self.background_df.iloc[int(indices[0])].copy()
+        raw = nearest_row.to_dict()
+        nearest_distance = float(distances[0])
+
+        if len(indices) == 1 or nearest_distance <= 1e-6:
+            return raw, nearest_distance
+
+        base_weights = 1.0 / np.maximum(distances, SPATIAL_DISTANCE_FLOOR_METERS)
+
+        for col in self.interpolated_background_columns:
+            values = pd.to_numeric(self.background_df.iloc[indices][col], errors="coerce").to_numpy(dtype=float)
+            valid_mask = np.isfinite(values)
+            if not np.any(valid_mask):
+                continue
+
+            weights = base_weights[valid_mask]
+            weight_sum = float(weights.sum())
+            if weight_sum <= 0.0:
+                continue
+
+            normalized_weights = weights / weight_sum
+            raw[col] = float(np.dot(values[valid_mask], normalized_weights))
+
+        return raw, nearest_distance
+
     def _classify_gpi(self, gpi: float) -> str:
         if gpi <= float(self.target_ranges.get("gpi_q25", 33.0)):
             return "Low"
@@ -296,8 +363,7 @@ class AwojaModelRuntime:
         return "Low priority for borehole siting"
 
     def predict_one_utm(self, utme: float, utmn: float) -> Dict[str, Any]:
-        row, distance = self._nearest_background_row(utme, utmn)
-        raw = row.to_dict()
+        raw, distance = self._interpolated_background_values(utme, utmn)
         raw["UTME"], raw["UTMN"] = float(utme), float(utmn)
 
         X = self._prepare_model_features(raw)[self.FEAT_COLS].values

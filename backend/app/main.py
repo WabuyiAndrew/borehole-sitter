@@ -185,6 +185,24 @@ def _require_runtime() -> AwojaModelRuntime:
     raise HTTPException(status_code=503, detail="Model is warming up. Please wait a moment and try again.")
 
 
+def _build_prediction_warnings(results: List[Dict[str, Any]]) -> List[str]:
+    if not results:
+        return []
+
+    far_reference_threshold_m = 2000.0
+    far_reference_points = [
+        result for result in results if float(result.get("nearest_background_distance_m", 0.0)) >= far_reference_threshold_m
+    ]
+
+    warnings: List[str] = []
+    if far_reference_points:
+        warnings.append(
+            "Some selected locations are far from the nearest calibrated background reference. "
+            "Use the nearest reference distance shown in the app to judge prediction confidence."
+        )
+    return warnings
+
+
 @app.on_event("startup")
 def _startup() -> None:
     Base.metadata.create_all(bind=engine)
@@ -274,8 +292,6 @@ def convert_coordinates(req: ConvertCoordinatesRequest, _: User = Depends(get_cu
 def predict(req: PredictRequest, _: User = Depends(get_current_user)) -> PredictResponse:
     loaded_runtime = _require_runtime()
 
-    warnings: List[str] = []
-
     # Batch mode
     if req.points_utm:
         if len(req.points_utm) > 500:
@@ -283,6 +299,7 @@ def predict(req: PredictRequest, _: User = Depends(get_current_user)) -> Predict
         results = [loaded_runtime.predict_one_utm(p.utme, p.utmn) for p in req.points_utm]
         results = sorted(results, key=lambda r: float(r.get("gpi", 0.0)), reverse=True)
         best = results[0] if results else {}
+        warnings = _build_prediction_warnings(results)
         return PredictResponse(best=best, results=results, warnings=warnings, bundle_version=str(loaded_runtime.bundle.get("model_names", "awoja")))
 
     # Single point mode: accept either UTM or Geo
@@ -295,6 +312,7 @@ def predict(req: PredictRequest, _: User = Depends(get_current_user)) -> Predict
         raise HTTPException(status_code=400, detail="Provide point_utm or point_geo")
 
     result = loaded_runtime.predict_one_utm(utm.utme, utm.utmn)
+    warnings = _build_prediction_warnings([result])
     return PredictResponse(best=result, results=[result], warnings=warnings, bundle_version=str(loaded_runtime.bundle.get("model_names", "awoja")))
 
 

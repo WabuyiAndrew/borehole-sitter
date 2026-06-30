@@ -42,6 +42,13 @@
     margin-bottom: 12px;
   }
 
+.authLead {
+  margin: 0 0 16px;
+  text-align: center;
+  color: rgba(226, 232, 240, 0.78);
+  font-size: 0.95rem;
+}
+
   .authAppName {
     text-align: center;
     font-size: 1.1rem;
@@ -278,6 +285,33 @@
     gap: 6px;
   }
 
+.metricGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.metricCard {
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  border-radius: 14px;
+  padding: 12px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.metricLabel {
+  color: rgba(226, 232, 240, 0.7);
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.metricValue {
+  margin-top: 6px;
+  color: #f8fafc;
+  font-size: 1rem;
+  font-weight: 800;
+}
+
   .placePanel {
     display: grid;
     gap: 4px;
@@ -322,6 +356,15 @@
     background: rgba(16, 185, 129, 0.12);
     color: rgba(255, 255, 255, 0.92);
   }
+
+.warningPanel {
+  margin-top: 8px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(245, 158, 11, 0.42);
+  background: rgba(245, 158, 11, 0.12);
+  color: rgba(255, 255, 255, 0.92);
+}
   
   .details {
     margin-top: 10px;
@@ -349,6 +392,9 @@
     .row {
       grid-template-columns: 1fr;
     }
+  .metricGrid {
+    grid-template-columns: 1fr;
+  }
     .modeToggle {
       grid-template-columns: 1fr;
     }
