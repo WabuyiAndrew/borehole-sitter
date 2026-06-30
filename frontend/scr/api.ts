@@ -100,6 +100,7 @@ const REPORT_PDF_URL = `${API_BASE_URL}/report/pdf`
 
 const TOKEN_KEY = 'drillscout_auth_token'
 const SESSION_KEY = 'drillscout_auth_session'
+let authTokenMemory: string | null = null
 
 async function readErrorMessage(res: Response) {
   const contentType = res.headers.get('content-type') || ''
@@ -126,7 +127,11 @@ async function readErrorMessage(res: Response) {
 
 async function fetchJson<T>(url: string, init: RequestInit, timeoutMs: number, signal?: AbortSignal): Promise<T> {
   const controller = new AbortController()
-  const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs)
+  let timedOut = false
+  const timeoutId = window.setTimeout(() => {
+    timedOut = true
+    controller.abort()
+  }, timeoutMs)
   const abortFromCaller = () => controller.abort()
   signal?.addEventListener('abort', abortFromCaller)
 
@@ -144,6 +149,9 @@ async function fetchJson<T>(url: string, init: RequestInit, timeoutMs: number, s
     return (await res.json()) as T
   } catch (err) {
     if (err instanceof DOMException && err.name === 'AbortError') {
+      if (signal?.aborted && !timedOut) {
+        throw err
+      }
       throw new Error('The service is taking longer than expected to respond. Please wait a moment and try again.')
     }
 
@@ -161,27 +169,65 @@ async function fetchJson<T>(url: string, init: RequestInit, timeoutMs: number, s
   }
 }
 
+function clearPersistedAuth() {
+  if (typeof window === 'undefined') return
+  window.localStorage.removeItem(TOKEN_KEY)
+  window.localStorage.removeItem(SESSION_KEY)
+}
+
+function shouldRetryServiceError(err: unknown) {
+  if (!(err instanceof Error)) return false
+  return /Model is warming up|temporarily unavailable|Request failed with status 503|Request failed with status 502/i.test(err.message)
+}
+
+function wait(ms: number, signal?: AbortSignal) {
+  return new Promise<void>((resolve, reject) => {
+    const timeoutId = window.setTimeout(() => {
+      signal?.removeEventListener('abort', abortListener)
+      resolve()
+    }, ms)
+    const abortListener = () => {
+      window.clearTimeout(timeoutId)
+      reject(new DOMException('Aborted', 'AbortError'))
+    }
+    signal?.addEventListener('abort', abortListener, { once: true })
+  })
+}
+
+async function fetchJsonWithRetry<T>(
+  url: string,
+  init: RequestInit,
+  timeoutMs: number,
+  retryDelaysMs: number[],
+  signal?: AbortSignal,
+): Promise<T> {
+  let lastError: unknown
+  for (let attempt = 0; attempt <= retryDelaysMs.length; attempt += 1) {
+    try {
+      return await fetchJson<T>(url, init, timeoutMs, signal)
+    } catch (err) {
+      lastError = err
+      if (!shouldRetryServiceError(err) || attempt === retryDelaysMs.length) {
+        throw err
+      }
+      await wait(retryDelaysMs[attempt], signal)
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error('The service is temporarily unavailable. Please try again.')
+}
+
 export function getApiBaseUrl() {
   return API_BASE_URL
 }
 
 export function getAuthToken() {
-  if (typeof window === 'undefined') return null
-  const session = window.localStorage.getItem(SESSION_KEY)
-  if (session !== 'logged_in') return null
-  const token = window.localStorage.getItem(TOKEN_KEY)
-  return token && token.trim() ? token : null
+  clearPersistedAuth()
+  return authTokenMemory && authTokenMemory.trim() ? authTokenMemory : null
 }
 
 export function setAuthToken(token: string | null) {
-  if (typeof window === 'undefined') return
-  if (!token) {
-    window.localStorage.removeItem(TOKEN_KEY)
-    window.localStorage.removeItem(SESSION_KEY)
-    return
-  }
-  window.localStorage.setItem(TOKEN_KEY, token)
-  window.localStorage.setItem(SESSION_KEY, 'logged_in')
+  authTokenMemory = token && token.trim() ? token : null
+  clearPersistedAuth()
 }
 
 function buildAuthHeaders(headers: Record<string, string> = {}) {
@@ -225,7 +271,7 @@ export async function signup(email: string, password: string) {
 }
 
 export async function predict(req: PredictRequest): Promise<PredictResponse> {
-  return fetchJson<PredictResponse>(
+  return fetchJsonWithRetry<PredictResponse>(
     PREDICT_URL,
     {
       method: 'POST',
@@ -233,6 +279,7 @@ export async function predict(req: PredictRequest): Promise<PredictResponse> {
       body: JSON.stringify(req),
     },
     60000,
+    [2000, 4000],
   )
 }
 
@@ -240,7 +287,7 @@ export async function convertCoordinates(
   req: ConvertCoordinatesRequest,
   signal?: AbortSignal,
 ): Promise<ConvertCoordinatesResponse> {
-  return fetchJson<ConvertCoordinatesResponse>(
+  return fetchJsonWithRetry<ConvertCoordinatesResponse>(
     CONVERT_COORDINATES_URL,
     {
       method: 'POST',
@@ -248,6 +295,7 @@ export async function convertCoordinates(
       body: JSON.stringify(req),
     },
     45000,
+    [1200, 2500],
     signal,
   )
 }

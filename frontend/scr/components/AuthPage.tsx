@@ -30,6 +30,9 @@ export function AuthPage(props: {
         </div>
         <div className="authAppName">DrillScout</div>
         <div className="authTitle">{title}</div>
+        <div className="authLead">
+          Start from the login page every time you open the app. If you do not have an account yet, create one first.
+        </div>
         <div className="authFields">
           <label>
             <div className="label">Email</div>
@@ -54,6 +57,7 @@ export function AuthPage(props: {
           </label>
         </div>
         {password && !isPasswordValid ? <div className="hint">Password must be more than 6 characters.</div> : null}
+        <div className="hint">For security, this app does not keep users signed in on the device after the app is reopened.</div>
         {props.message ? <div className="success">{props.message}</div> : null}
         {props.error ? <div className="error">{props.error}</div> : null}
         <div className="buttons">

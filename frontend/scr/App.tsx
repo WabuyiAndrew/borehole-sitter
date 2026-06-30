@@ -10,6 +10,7 @@ import {
   signup as apiSignup,
   type ConvertCoordinatesRequest,
   type ConvertCoordinatesResponse,
+  type PredictResponse,
   type PredictResult,
   warmBackend,
 } from './api'
@@ -65,6 +66,7 @@ const DEFAULT_LOCATION: LatLng = {
 }
 
 const DEFAULT_BATCH_INPUT = ['520000,180000', '520250,180250', '520500,180500'].join('\n')
+const placeLookupCache = new Map<string, PlaceLookup | null>()
 
 function parseBatchInput(value: string): BatchPoint[] {
   const lines = value
@@ -212,6 +214,11 @@ function buildPlaceLookup(data: unknown, latitude: number, longitude: number): P
 }
 
 async function reverseGeocodePoint(latitude: number, longitude: number, signal: AbortSignal): Promise<PlaceLookup | null> {
+  const cacheKey = `${latitude.toFixed(4)},${longitude.toFixed(4)}`
+  if (placeLookupCache.has(cacheKey)) {
+    return placeLookupCache.get(cacheKey) || null
+  }
+
   const url = new URL('https://nominatim.openstreetmap.org/reverse')
   url.searchParams.set('format', 'jsonv2')
   url.searchParams.set('lat', String(latitude))
@@ -230,7 +237,9 @@ async function reverseGeocodePoint(latitude: number, longitude: number, signal: 
   if (!response.ok) return null
 
   const payload = (await response.json()) as unknown
-  return buildPlaceLookup(payload, latitude, longitude)
+  const placeLookup = buildPlaceLookup(payload, latitude, longitude)
+  placeLookupCache.set(cacheKey, placeLookup)
+  return placeLookup
 }
 
 function escapeCsvValue(value: string | number) {
@@ -239,6 +248,15 @@ function escapeCsvValue(value: string | number) {
     return `"${text.replace(/"/g, '""')}"`
   }
   return text
+}
+
+function formatDistance(distanceMeters: number) {
+  if (!Number.isFinite(distanceMeters)) return 'Unavailable'
+  if (distanceMeters >= 1000) {
+    const rounded = distanceMeters >= 10000 ? 0 : 1
+    return `${(distanceMeters / 1000).toFixed(rounded)} km`
+  }
+  return `${Math.round(distanceMeters)} m`
 }
 
 async function saveTextFile(filename: string, content: string, mimeType: string) {
@@ -251,23 +269,38 @@ async function saveBlobFile(filename: string, blob: Blob, mimeType: string) {
   const pickerWindow = window as WindowWithFilePicker
   const extension = filename.includes('.') ? `.${filename.split('.').pop() || 'txt'}` : '.txt'
   const acceptMimeType = mimeType.split(';')[0] || 'text/plain'
+  const embeddedProtocol =
+    typeof window !== 'undefined' && typeof window.location?.protocol === 'string'
+      ? window.location.protocol
+      : ''
+  const prefersBrowserDownload =
+    embeddedProtocol === 'capacitor:' || embeddedProtocol === 'ionic:'
 
-  if (typeof pickerWindow.showSaveFilePicker === 'function') {
-    const handle = await pickerWindow.showSaveFilePicker({
-      suggestedName: filename,
-      types: [
-        {
-          description: 'Exported file',
-          accept: {
-            [acceptMimeType]: [extension],
+  if (!prefersBrowserDownload && typeof pickerWindow.showSaveFilePicker === 'function') {
+    try {
+      const handle = await pickerWindow.showSaveFilePicker({
+        suggestedName: filename,
+        types: [
+          {
+            description: 'Exported file',
+            accept: {
+              [acceptMimeType]: [extension],
+            },
           },
-        },
-      ],
-    })
-    const writable = await handle.createWritable()
-    await writable.write(blob)
-    await writable.close()
-    return
+        ],
+      })
+      const writable = await handle.createWritable()
+      await writable.write(blob)
+      await writable.close()
+      return
+    } catch (err) {
+      if (err instanceof DOMException && ['AbortError', 'NotAllowedError', 'SecurityError'].includes(err.name)) {
+        // Some environments (notably mobile WebViews) throw AbortError/NotAllowedError even when the user did not cancel.
+        // Fall through to the share / anchor download fallback.
+      } else {
+        throw err
+      }
+    }
   }
 
   const shareData: ShareData = {
@@ -279,8 +312,16 @@ async function saveBlobFile(filename: string, blob: Blob, mimeType: string) {
   }
 
   if (typeof navigator.share === 'function' && typeof shareNavigator.canShare === 'function' && shareNavigator.canShare(shareData)) {
-    await navigator.share(shareData)
-    return
+    try {
+      await navigator.share(shareData)
+      return
+    } catch (err) {
+      if (err instanceof DOMException && ['AbortError', 'NotAllowedError', 'SecurityError'].includes(err.name)) {
+        // Fall back to anchor download.
+      } else {
+        throw err
+      }
+    }
   }
 
   const href = URL.createObjectURL(blob)
@@ -296,7 +337,7 @@ async function saveBlobFile(filename: string, blob: Blob, mimeType: string) {
 }
 
 function App() {
-  const [token, setToken] = useState(() => readAuthToken())
+  const [token, setToken] = useState<string | null>(null)
   const [authMode, setAuthMode] = useState<AuthMode>('login')
   const [authBusy, setAuthBusy] = useState(false)
   const [authError, setAuthError] = useState<string | null>(null)
@@ -310,6 +351,7 @@ function App() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [results, setResults] = useState<PredictResult[] | null>(null)
+  const [predictionWarnings, setPredictionWarnings] = useState<string[]>([])
   const [status, setStatus] = useState<'ready' | 'warming' | 'connected' | 'error'>('warming')
   const [conversion, setConversion] = useState<ConvertCoordinatesResponse | null>(null)
   const [converting, setConverting] = useState(false)
@@ -382,6 +424,7 @@ function App() {
       if (authMode === 'login') {
         await apiLogin(username, password)
         setToken(readAuthToken())
+        setAuthMessage('Signed in for this app session. You will be asked to log in again the next time the app opens.')
         return
       }
       await apiSignup(username, password)
@@ -420,6 +463,9 @@ function App() {
 
   const decisionClass =
     best?.decision === 'Suitable' ? 'good' : best?.decision === 'Moderate' ? 'warn' : best ? 'bad' : 'muted'
+  const reliabilityLabel = best
+    ? `Nearest calibrated background point: ${formatDistance(best.nearest_background_distance_m)}`
+    : 'Reliability indicators appear after prediction.'
 
   const activePoint = useMemo(() => {
     if (best) {
@@ -577,10 +623,22 @@ function App() {
     setPlaceName(null)
     setPlaceDetails(null)
     setResults(null)
+    setPredictionWarnings([])
     setLocationSummary(summary)
     setError(null)
     setConversionError(null)
     setStatus('ready')
+  }
+
+  function applyPredictionResponse(resp: PredictResponse, summary: string) {
+    setResults(resp.results)
+    setPredictionWarnings(resp.warnings || [])
+    setUtme(String(Math.round(resp.best.utme)))
+    setUtmn(String(Math.round(resp.best.utmn)))
+    setLatitudeInput(resp.best.latitude.toFixed(5))
+    setLongitudeInput(resp.best.longitude.toFixed(5))
+    setLocationSummary(summary)
+    setStatus('connected')
   }
 
   function syncInputsFromConversion(nextConversion: ConvertCoordinatesResponse) {
@@ -687,19 +745,15 @@ function App() {
         })
       }
 
-      setResults(resp.results)
-      setUtme(String(Math.round(resp.best.utme)))
-      setUtmn(String(Math.round(resp.best.utmn)))
-      setLatitudeInput(resp.best.latitude.toFixed(5))
-      setLongitudeInput(resp.best.longitude.toFixed(5))
-      setLocationSummary(
+      applyPredictionResponse(
+        resp,
         coordinateMode === 'latlon'
           ? 'Backend-converted latitude and longitude were evaluated successfully.'
           : 'Backend-confirmed UTM coordinates were evaluated successfully.',
       )
-      setStatus('connected')
     } catch (err) {
       setError(formatRuntimeError(err))
+      setPredictionWarnings([])
       setStatus('error')
     } finally {
       setLoading(false)
@@ -738,15 +792,10 @@ function App() {
       setLocationSummary(`Detected your current position with ${accuracy}.`)
 
       const resp = await predict({ source: 'geolocation', point_geo: { longitude, latitude } })
-      setResults(resp.results)
-      setUtme(String(Math.round(resp.best.utme)))
-      setUtmn(String(Math.round(resp.best.utmn)))
-      setLatitudeInput(resp.best.latitude.toFixed(5))
-      setLongitudeInput(resp.best.longitude.toFixed(5))
-      setLocationSummary(`Detected your position with ${accuracy}. The map marker moved to your location.`)
-      setStatus('connected')
+      applyPredictionResponse(resp, `Detected your position with ${accuracy}. The map marker moved to your location.`)
     } catch (err) {
       setError(formatRuntimeError(err))
+      setPredictionWarnings([])
       setStatus('error')
     } finally {
       setLoading(false)
@@ -763,16 +812,11 @@ function App() {
         throw new Error('Enter at least two coordinate pairs in batch mode to render comparison charts.')
       }
       const resp = await predict({ source: 'manual', points_utm: points })
-      setResults(resp.results)
       setConversion(null)
-      setLatitudeInput(resp.best.latitude.toFixed(5))
-      setLongitudeInput(resp.best.longitude.toFixed(5))
-      setUtme(String(Math.round(resp.best.utme)))
-      setUtmn(String(Math.round(resp.best.utmn)))
-      setLocationSummary(`Batch analysis completed for ${resp.results.length} points. The map centers on the best-ranked candidate.`)
-      setStatus('connected')
+      applyPredictionResponse(resp, `Batch analysis completed for ${resp.results.length} points. The map centers on the best-ranked candidate.`)
     } catch (err) {
       setError(formatRuntimeError(err))
+      setPredictionWarnings([])
       setStatus('error')
     } finally {
       setLoading(false)
@@ -931,6 +975,7 @@ function App() {
           </p>
           <p className="hint">Tap the map to pick a point.</p>
           <p className="hint">{locationSummary || conversionHint || (converting ? 'Resolving coordinates…' : 'Choose a point to begin.')}</p>
+          <p className="hint">{reliabilityLabel}</p>
 
           <details className="details">
             <summary>Batch mode, charts, and exports</summary>
@@ -968,9 +1013,23 @@ function App() {
                 </div>
                 <div className="resultTop">
                   <div className={`badge ${decisionClass}`}>{best.decision}</div>
-                  <div className="muted">
-                    GPI <b>{best.gpi.toFixed(2)}</b> · Yield <b>{best.predicted_yield_m3h.toFixed(2)} m³/h</b> · SWL{' '}
-                    <b>{best.predicted_static_water_level_m.toFixed(2)} m</b>
+                  <div className="metricGrid">
+                    <div className="metricCard">
+                      <div className="metricLabel">GPI</div>
+                      <div className="metricValue">{best.gpi.toFixed(2)}</div>
+                    </div>
+                    <div className="metricCard">
+                      <div className="metricLabel">Yield</div>
+                      <div className="metricValue">{best.predicted_yield_m3h.toFixed(2)} m³/h</div>
+                    </div>
+                    <div className="metricCard">
+                      <div className="metricLabel">SWL</div>
+                      <div className="metricValue">{best.predicted_static_water_level_m.toFixed(2)} m</div>
+                    </div>
+                    <div className="metricCard">
+                      <div className="metricLabel">Nearest reference</div>
+                      <div className="metricValue">{formatDistance(best.nearest_background_distance_m)}</div>
+                    </div>
                   </div>
                   <div className="muted">
                     Coordinates: {best.latitude.toFixed(5)}, {best.longitude.toFixed(5)} · Model UTME <b>{best.utme.toFixed(0)}</b> · Model UTMN{' '}
@@ -983,6 +1042,7 @@ function App() {
                       <b>{conversion.authoritative.utmn.toFixed(0)}</b>
                     </div>
                   ) : null}
+                  {predictionWarnings.length ? <div className="warningPanel">{predictionWarnings.join(' ')}</div> : null}
                   <div className="muted">{best.recommendation}</div>
                 </div>
                 <div className="buttons compact">
