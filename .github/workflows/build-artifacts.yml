@@ -85,10 +85,6 @@ jobs:
           VITE_MAPTILER_KEY: ''
         run: npm run build
 
-      - name: Fix Rust dependency mismatch
-        working-directory: frontend/src-tauri
-        run: cargo update -p time --precise 0.3.36
-      
       - name: Build Tauri bundle
         working-directory: frontend
         run: npm run tauri:build
