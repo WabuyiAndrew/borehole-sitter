@@ -25,6 +25,7 @@ MODEL_PATH = os.path.abspath(MODEL_PATH)
 
 
 app = FastAPI(title="Awoja Borehole Siting API", version="0.1.0")
+API_BUILD = os.getenv("API_BUILD", "2026-06-30.1")
 
 
 def _parse_csv_env(name: str, default: str) -> List[str]:
@@ -215,6 +216,8 @@ def health() -> Dict[str, Any]:
         "ok": True,
         "model_loaded": runtime is not None,
         "model_status": "ready" if runtime is not None else "loading" if runtime_loading else "error" if runtime_error else "starting",
+        "api_build": API_BUILD,
+        "prediction_engine": "knn_interpolated_v1",
     }
 
 
