@@ -269,8 +269,14 @@ async function saveBlobFile(filename: string, blob: Blob, mimeType: string) {
   const pickerWindow = window as WindowWithFilePicker
   const extension = filename.includes('.') ? `.${filename.split('.').pop() || 'txt'}` : '.txt'
   const acceptMimeType = mimeType.split(';')[0] || 'text/plain'
+  const embeddedProtocol =
+    typeof window !== 'undefined' && typeof window.location?.protocol === 'string'
+      ? window.location.protocol
+      : ''
+  const prefersBrowserDownload =
+    embeddedProtocol === 'capacitor:' || embeddedProtocol === 'ionic:'
 
-  if (typeof pickerWindow.showSaveFilePicker === 'function') {
+  if (!prefersBrowserDownload && typeof pickerWindow.showSaveFilePicker === 'function') {
     try {
       const handle = await pickerWindow.showSaveFilePicker({
         suggestedName: filename,
