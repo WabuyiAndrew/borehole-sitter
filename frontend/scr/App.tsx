@@ -1,5 +1,5 @@
 import './App.css'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   convertCoordinates,
   fetchReportPdf,
@@ -273,8 +273,21 @@ async function saveBlobFile(filename: string, blob: Blob, mimeType: string) {
     typeof window !== 'undefined' && typeof window.location?.protocol === 'string'
       ? window.location.protocol
       : ''
+  const maybeCapacitorWindow = window as Window &
+    Partial<{
+      Capacitor: {
+        isNativePlatform?: () => boolean
+        getPlatform?: () => string
+      }
+    }>
+  const isCapacitorNative =
+    typeof maybeCapacitorWindow.Capacitor?.isNativePlatform === 'function'
+      ? Boolean(maybeCapacitorWindow.Capacitor.isNativePlatform())
+      : typeof maybeCapacitorWindow.Capacitor?.getPlatform === 'function'
+        ? ['android', 'ios'].includes(String(maybeCapacitorWindow.Capacitor.getPlatform()).toLowerCase())
+        : false
   const prefersBrowserDownload =
-    embeddedProtocol === 'capacitor:' || embeddedProtocol === 'ionic:'
+    embeddedProtocol === 'capacitor:' || embeddedProtocol === 'ionic:' || isCapacitorNative
 
   if (!prefersBrowserDownload && typeof pickerWindow.showSaveFilePicker === 'function') {
     try {
@@ -294,7 +307,7 @@ async function saveBlobFile(filename: string, blob: Blob, mimeType: string) {
       await writable.close()
       return
     } catch (err) {
-      if (err instanceof DOMException && ['AbortError', 'NotAllowedError', 'SecurityError'].includes(err.name)) {
+      if (err instanceof DOMException && ['AbortError', 'NotAllowedError', 'SecurityError', 'InvalidStateError'].includes(err.name)) {
         // Some environments (notably mobile WebViews) throw AbortError/NotAllowedError even when the user did not cancel.
         // Fall through to the share / anchor download fallback.
       } else {
@@ -361,6 +374,7 @@ function App() {
   const [placeDetails, setPlaceDetails] = useState<string | null>(null)
   const [lookingUpPlace, setLookingUpPlace] = useState(false)
   const [manualInteraction, setManualInteraction] = useState(false)
+  const hasBeenHiddenRef = useRef(false)
 
   function formatRuntimeError(err: unknown) {
     if (typeof navigator !== 'undefined' && navigator.onLine === false) {
@@ -444,6 +458,23 @@ function App() {
     setToken(null)
     resetSelectionState('Signed out')
   }
+
+  useEffect(() => {
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') {
+        hasBeenHiddenRef.current = true
+        return
+      }
+      if (document.visibilityState === 'visible' && hasBeenHiddenRef.current) {
+        if (token) logout()
+        hasBeenHiddenRef.current = false
+      }
+    }
+    document.addEventListener('visibilitychange', onVisibilityChange)
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibilityChange)
+    }
+  }, [token])
 
   const best = useMemo(() => (results && results.length ? results[0] : null), [results])
   const latLonDraft = useMemo(
