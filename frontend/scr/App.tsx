@@ -288,8 +288,12 @@ async function saveBlobFile(filename: string, blob: Blob, mimeType: string) {
       await writable.close()
       return
     } catch (err) {
-      if (err instanceof DOMException && err.name === 'AbortError') return
-      throw err
+      if (err instanceof DOMException && ['AbortError', 'NotAllowedError', 'SecurityError'].includes(err.name)) {
+        // Some environments (notably mobile WebViews) throw AbortError/NotAllowedError even when the user did not cancel.
+        // Fall through to the share / anchor download fallback.
+      } else {
+        throw err
+      }
     }
   }
 
@@ -306,8 +310,11 @@ async function saveBlobFile(filename: string, blob: Blob, mimeType: string) {
       await navigator.share(shareData)
       return
     } catch (err) {
-      if (err instanceof DOMException && err.name === 'AbortError') return
-      throw err
+      if (err instanceof DOMException && ['AbortError', 'NotAllowedError', 'SecurityError'].includes(err.name)) {
+        // Fall back to anchor download.
+      } else {
+        throw err
+      }
     }
   }
 
