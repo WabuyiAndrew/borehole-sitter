@@ -5,7 +5,7 @@ import threading
 from io import BytesIO
 from typing import Any, Dict, List, Literal, Optional
 
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import AliasChoices, BaseModel, EmailStr, Field
@@ -209,13 +209,18 @@ def _startup() -> None:
     _ensure_model_loading()
 
 
-@app.get("/health")
+@app.api_route("/health", methods=["GET", "HEAD"])
 def health() -> Dict[str, Any]:
     return {
         "ok": True,
         "model_loaded": runtime is not None,
         "model_status": "ready" if runtime is not None else "loading" if runtime_loading else "error" if runtime_error else "starting",
     }
+
+
+@app.get("/favicon.ico")
+def favicon() -> Response:
+    return Response(status_code=204)
 
 
 @app.api_route("/", methods=["GET", "HEAD"])
