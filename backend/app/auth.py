@@ -20,7 +20,7 @@ security = HTTPBearer(auto_error=False)
 
 JWT_SECRET = os.getenv("JWT_SECRET", "dev-secret-change-me").strip()
 JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256").strip() or "HS256"
-JWT_EXPIRE_MINUTES = int(os.getenv("JWT_EXPIRE_MINUTES", "43200"))
+JWT_EXPIRE_MINUTES = int(os.getenv("JWT_EXPIRE_MINUTES", "120"))
 
 
 def get_db() -> Generator[Session, None, None]:

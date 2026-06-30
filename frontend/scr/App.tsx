@@ -453,11 +453,11 @@ function App() {
     }
   }
 
-  function logout() {
+  const logout = useCallback(() => {
     writeAuthToken(null)
     setToken(null)
     resetSelectionState('Signed out')
-  }
+  }, [])
 
   useEffect(() => {
     const onVisibilityChange = () => {
@@ -549,6 +549,12 @@ function App() {
   useEffect(() => {
     if (!token) return
     let active = true
+    const intervalId = window.setInterval(() => {
+      void warmBackend().then((ok) => {
+        if (!active) return
+        setStatus((current) => (current === 'connected' ? current : ok ? 'ready' : 'error'))
+      })
+    }, 240000)
 
     void warmBackend().then((ok) => {
       if (!active) return
@@ -557,14 +563,46 @@ function App() {
 
     return () => {
       active = false
+      window.clearInterval(intervalId)
     }
   }, [token])
+
+  useEffect(() => {
+    if (!token) return
+
+    const bump = () => {
+      lastActivityAtRef.current = Date.now()
+    }
+
+    bump()
+
+    window.addEventListener('pointerdown', bump, { passive: true })
+    window.addEventListener('keydown', bump)
+    window.addEventListener('touchstart', bump, { passive: true })
+    window.addEventListener('scroll', bump, { passive: true })
+
+    const idleMs = 30 * 60 * 1000
+    const checkId = window.setInterval(() => {
+      if (Date.now() - lastActivityAtRef.current > idleMs) {
+        logout()
+      }
+    }, 15000)
+
+    return () => {
+      window.removeEventListener('pointerdown', bump)
+      window.removeEventListener('keydown', bump)
+      window.removeEventListener('touchstart', bump)
+      window.removeEventListener('scroll', bump)
+      window.clearInterval(checkId)
+    }
+  }, [logout, token])
 
   useEffect(() => {
     if (!token || !manualInteraction || !manualDraft.request) {
       setConversion(null)
       setConversionError(null)
       setConverting(false)
+      lastConversionKeyRef.current = null
       if (coordinateMode === 'latlon') {
         if (!manualInteraction) {
           setUtme('')
@@ -578,6 +616,16 @@ function App() {
       }
       return
     }
+
+    if (suppressConversionRef.current) {
+      suppressConversionRef.current = false
+      return
+    }
+
+    if (manualDraft.key && lastConversionKeyRef.current === manualDraft.key) {
+      return
+    }
+    lastConversionKeyRef.current = manualDraft.key
 
     const request = manualDraft.request
     const controller = new AbortController()
@@ -605,13 +653,13 @@ function App() {
             setConverting(false)
           }
         })
-    }, 250)
-
+    }, 650)
     return () => {
       window.clearTimeout(timeoutId)
       controller.abort()
     }
   }, [coordinateMode, manualDraft.request, manualInteraction, token])
+
 
   useEffect(() => {
     if (!token || !manualInteraction || !activePoint) {
@@ -662,6 +710,7 @@ function App() {
   }
 
   function applyPredictionResponse(resp: PredictResponse, summary: string) {
+    suppressConversionRef.current = true
     setResults(resp.results)
     setPredictionWarnings(resp.warnings || [])
     setUtme(String(Math.round(resp.best.utme)))
@@ -670,9 +719,12 @@ function App() {
     setLongitudeInput(resp.best.longitude.toFixed(5))
     setLocationSummary(summary)
     setStatus('connected')
+    setConversion(null)
+    setConversionError(null)
   }
 
   function syncInputsFromConversion(nextConversion: ConvertCoordinatesResponse) {
+    suppressConversionRef.current = true
     setConversion(nextConversion)
     setConversionError(null)
     setUtme(String(Math.round(nextConversion.model.utme)))
@@ -682,6 +734,7 @@ function App() {
   }
 
   function switchCoordinateMode(nextMode: CoordinateMode) {
+    suppressConversionRef.current = true
     setManualInteraction(true)
     if (conversion) {
       syncInputsFromConversion(conversion)

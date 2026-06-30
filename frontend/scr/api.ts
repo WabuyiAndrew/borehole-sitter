@@ -278,8 +278,8 @@ export async function predict(req: PredictRequest): Promise<PredictResponse> {
       headers: buildAuthHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify(req),
     },
-    60000,
-    [2000, 4000],
+    90000,
+    [2000, 4000, 8000, 12000, 16000],
   )
 }
 

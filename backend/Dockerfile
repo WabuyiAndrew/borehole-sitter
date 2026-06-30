@@ -12,4 +12,4 @@ ENV MODEL_PATH=/app/models/awoja_deployment_bundle.joblib
 ENV CORS_ALLOW_ALL=true
 
 EXPOSE 8000
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
