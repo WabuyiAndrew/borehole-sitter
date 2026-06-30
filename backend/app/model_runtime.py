@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+from functools import lru_cache
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -8,6 +9,37 @@ import joblib
 import numpy as np
 import pandas as pd
 from pyproj import Transformer
+
+
+MODEL_UTM_ZONE = 36
+MODEL_UTM_NORTHERN = True
+MODEL_UTM_EPSG = 32636
+SPATIAL_INTERPOLATION_K = 6
+SPATIAL_DISTANCE_FLOOR_METERS = 1.0
+BACKGROUND_INTERPOLATED_COLUMNS = (
+    "Elevation",
+    "Slope_Value",
+    "slope",
+    "Slope",
+    "MODFLOW_Head",
+    "K",
+    "AverageRainfall",
+    "Average_Rainfall",
+    "Rainfall",
+    "Distance_To_Waterbody",
+    "Distance_to_water",
+    "NDVI",
+    "ndvi",
+    "Total_Drilling_Depth",
+    "Drilling_Depth",
+    "Total_Casing_Depth",
+    "Casing_Depth",
+)
+
+
+@lru_cache(maxsize=256)
+def _cached_transformer(from_epsg: int, to_epsg: int) -> Transformer:
+    return Transformer.from_crs(f"EPSG:{from_epsg}", f"EPSG:{to_epsg}", always_xy=True)
 
 
 @dataclass(frozen=True)
@@ -49,6 +81,9 @@ class AwojaModelRuntime:
         self.background_df["UTMN"] = pd.to_numeric(self.background_df["UTMN"], errors="coerce")
         self.background_df = self.background_df.dropna(subset=["UTME", "UTMN"]).reset_index(drop=True)
         self.background_xy = self.background_df[["UTME", "UTMN"]].to_numpy(dtype=float)
+        self.interpolated_background_columns = [
+            col for col in BACKGROUND_INTERPOLATED_COLUMNS if col in self.background_df.columns
+        ]
 
         # Fast nearest-neighbour lookup if SciPy is available (it is in requirements)
         try:
@@ -59,8 +94,8 @@ class AwojaModelRuntime:
             self.background_tree = None
 
         # Coordinate transforms
-        self._geo_to_utm36 = Transformer.from_crs("EPSG:4326", "EPSG:32636", always_xy=True)
-        self._utm36_to_geo = Transformer.from_crs("EPSG:32636", "EPSG:4326", always_xy=True)
+        self._geo_to_utm36 = _cached_transformer(4326, MODEL_UTM_EPSG)
+        self._utm36_to_geo = _cached_transformer(MODEL_UTM_EPSG, 4326)
 
     def info(self) -> ModelInfo:
         return ModelInfo(
@@ -76,13 +111,79 @@ class AwojaModelRuntime:
     # -----------------------
     # Coordinates
     # -----------------------
+    @staticmethod
+    def detect_utm_zone(longitude: float) -> int:
+        zone = int(math.floor((float(longitude) + 180.0) / 6.0) + 1)
+        return max(1, min(60, zone))
+
+    @staticmethod
+    def normalize_utm_zone(zone: int) -> int:
+        zone_value = int(zone)
+        if zone_value < 1 or zone_value > 60:
+            raise ValueError("UTM zone must be between 1 and 60")
+        return zone_value
+
+    @staticmethod
+    def utm_epsg(zone: int, northern: bool) -> int:
+        normalized_zone = AwojaModelRuntime.normalize_utm_zone(zone)
+        return int((32600 if northern else 32700) + normalized_zone)
+
+    def geo_to_utm(self, lon: float, lat: float, zone: Optional[int] = None, northern: Optional[bool] = None) -> Tuple[float, float, int, bool, int]:
+        normalized_zone = self.detect_utm_zone(lon) if zone is None else self.normalize_utm_zone(zone)
+        is_northern = bool(lat >= 0.0) if northern is None else bool(northern)
+        epsg = self.utm_epsg(normalized_zone, is_northern)
+        transformer = _cached_transformer(4326, epsg)
+        e, n = transformer.transform(lon, lat)
+        return float(e), float(n), normalized_zone, is_northern, epsg
+
     def geo_to_utm36(self, lon: float, lat: float) -> Tuple[float, float]:
         e, n = self._geo_to_utm36.transform(lon, lat)
         return float(e), float(n)
 
+    def utm_to_geo(self, utme: float, utmn: float, zone: int = MODEL_UTM_ZONE, northern: bool = MODEL_UTM_NORTHERN) -> Tuple[float, float]:
+        epsg = self.utm_epsg(zone, northern)
+        transformer = _cached_transformer(epsg, 4326)
+        lon, lat = transformer.transform(utme, utmn)
+        return float(lon), float(lat)
+
     def utm36_to_geo(self, utme: float, utmn: float) -> Tuple[float, float]:
         lon, lat = self._utm36_to_geo.transform(utme, utmn)
         return float(lon), float(lat)
+
+    def coordinate_reference(self, utme: float, utmn: float, zone: int, northern: bool) -> Dict[str, Any]:
+        lon, lat = self.utm_to_geo(utme, utmn, zone=zone, northern=northern)
+        return {
+            "utme": float(utme),
+            "utmn": float(utmn),
+            "longitude": float(lon),
+            "latitude": float(lat),
+            "zone": int(zone),
+            "northern": bool(northern),
+            "epsg": self.utm_epsg(zone, northern),
+        }
+
+    def convert_from_geo(self, lon: float, lat: float) -> Dict[str, Dict[str, Any]]:
+        auth_e, auth_n, auth_zone, auth_northern, _ = self.geo_to_utm(lon, lat)
+        model_e, model_n = self.geo_to_utm36(lon, lat)
+        return {
+            "authoritative": self.coordinate_reference(auth_e, auth_n, auth_zone, auth_northern),
+            "model": self.coordinate_reference(model_e, model_n, MODEL_UTM_ZONE, MODEL_UTM_NORTHERN),
+        }
+
+    def convert_from_utm(
+        self,
+        utme: float,
+        utmn: float,
+        zone: int = MODEL_UTM_ZONE,
+        northern: bool = MODEL_UTM_NORTHERN,
+    ) -> Dict[str, Dict[str, Any]]:
+        normalized_zone = self.normalize_utm_zone(zone)
+        lon, lat = self.utm_to_geo(utme, utmn, zone=normalized_zone, northern=northern)
+        model_e, model_n = self.geo_to_utm36(lon, lat)
+        return {
+            "authoritative": self.coordinate_reference(float(utme), float(utmn), normalized_zone, northern),
+            "model": self.coordinate_reference(model_e, model_n, MODEL_UTM_ZONE, MODEL_UTM_NORTHERN),
+        }
 
     # -----------------------
     # Feature preparation
@@ -195,6 +296,49 @@ class AwojaModelRuntime:
             distance = float(distances[idx])
         return self.background_df.iloc[int(idx)].copy(), float(distance)
 
+    def _nearest_background_neighbors(self, utme: float, utmn: float, k: int = SPATIAL_INTERPOLATION_K) -> Tuple[np.ndarray, np.ndarray]:
+        point = np.array([float(utme), float(utmn)], dtype=float)
+        neighbors = max(1, min(int(k), len(self.background_df)))
+
+        if self.background_tree is not None:
+            distances, indices = self.background_tree.query(point, k=neighbors)
+        else:
+            all_distances = np.sqrt(((self.background_xy - point) ** 2).sum(axis=1))
+            indices = np.argsort(all_distances)[:neighbors]
+            distances = all_distances[indices]
+
+        distance_array = np.atleast_1d(np.asarray(distances, dtype=float))
+        index_array = np.atleast_1d(np.asarray(indices, dtype=int))
+        order = np.argsort(distance_array)
+        return index_array[order], distance_array[order]
+
+    def _interpolated_background_values(self, utme: float, utmn: float) -> Tuple[Dict[str, Any], float]:
+        indices, distances = self._nearest_background_neighbors(utme, utmn)
+        nearest_row = self.background_df.iloc[int(indices[0])].copy()
+        raw = nearest_row.to_dict()
+        nearest_distance = float(distances[0])
+
+        if len(indices) == 1 or nearest_distance <= 1e-6:
+            return raw, nearest_distance
+
+        base_weights = 1.0 / np.maximum(distances, SPATIAL_DISTANCE_FLOOR_METERS)
+
+        for col in self.interpolated_background_columns:
+            values = pd.to_numeric(self.background_df.iloc[indices][col], errors="coerce").to_numpy(dtype=float)
+            valid_mask = np.isfinite(values)
+            if not np.any(valid_mask):
+                continue
+
+            weights = base_weights[valid_mask]
+            weight_sum = float(weights.sum())
+            if weight_sum <= 0.0:
+                continue
+
+            normalized_weights = weights / weight_sum
+            raw[col] = float(np.dot(values[valid_mask], normalized_weights))
+
+        return raw, nearest_distance
+
     def _classify_gpi(self, gpi: float) -> str:
         if gpi <= float(self.target_ranges.get("gpi_q25", 33.0)):
             return "Low"
@@ -219,8 +363,7 @@ class AwojaModelRuntime:
         return "Low priority for borehole siting"
 
     def predict_one_utm(self, utme: float, utmn: float) -> Dict[str, Any]:
-        row, distance = self._nearest_background_row(utme, utmn)
-        raw = row.to_dict()
+        raw, distance = self._interpolated_background_values(utme, utmn)
         raw["UTME"], raw["UTMN"] = float(utme), float(utmn)
 
         X = self._prepare_model_features(raw)[self.FEAT_COLS].values

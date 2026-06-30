@@ -9,9 +9,47 @@ function classCounts(results: PredictResult[]) {
 }
 
 export function Charts({ results }: { results: PredictResult[] }) {
-  if (results.length < 2) return null
-
   const counts = classCounts(results)
+  const resultLabels = results.map((_, index) => `Point ${index + 1}`)
+  const rotateLabels = results.length > 8
+
+  const optionMetrics = {
+    animation: false,
+    tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, appendToBody: true },
+    legend: { textStyle: { color: '#cbd5e1' } },
+    xAxis: {
+      type: 'category',
+      data: resultLabels,
+      axisLabel: { color: '#cbd5e1', interval: 0, rotate: rotateLabels ? 35 : 0, margin: 14 },
+      axisTick: { alignWithLabel: true },
+    },
+    yAxis: {
+      type: 'value',
+      axisLabel: { color: '#cbd5e1' },
+      splitLine: { lineStyle: { color: '#24324f' } },
+    },
+    grid: { left: 45, right: 20, top: 30, bottom: rotateLabels ? 72 : 48, containLabel: true },
+    series: [
+      {
+        name: 'GPI',
+        type: 'bar',
+        data: results.map((r) => Number(r.gpi.toFixed(2))),
+        itemStyle: { color: '#38bdf8' },
+      },
+      {
+        name: 'Yield (m³/h)',
+        type: 'bar',
+        data: results.map((r) => Number(r.predicted_yield_m3h.toFixed(2))),
+        itemStyle: { color: '#22c55e' },
+      },
+      {
+        name: 'SWL (m)',
+        type: 'bar',
+        data: results.map((r) => Number(r.predicted_static_water_level_m.toFixed(2))),
+        itemStyle: { color: '#f59e0b' },
+      },
+    ],
+  }
 
   const optionClassBar = {
     animation: false,
@@ -94,18 +132,25 @@ export function Charts({ results }: { results: PredictResult[] }) {
   return (
     <div style={{ display: 'grid', gap: 12 }}>
       <div style={{ border: '1px solid #2a3a5a', borderRadius: 12, padding: 10, background: 'rgba(255,255,255,0.04)' }}>
-        <div style={{ fontWeight: 700, marginBottom: 8 }}>Predicted suitability class distribution</div>
-        <ReactECharts option={optionClassBar} style={{ height: 260 }} />
+        <div style={{ fontWeight: 700, marginBottom: 8 }}>Prediction metrics overview</div>
+        <ReactECharts option={optionMetrics} style={{ height: 280 }} />
       </div>
-      <div style={{ border: '1px solid #2a3a5a', borderRadius: 12, padding: 10, background: 'rgba(255,255,255,0.04)' }}>
-        <div style={{ fontWeight: 700, marginBottom: 8 }}>Predicted yield vs GPI</div>
-        <ReactECharts option={optionYieldVsGpi} style={{ height: 280 }} />
-      </div>
-      <div style={{ border: '1px solid #2a3a5a', borderRadius: 12, padding: 10, background: 'rgba(255,255,255,0.04)' }}>
-        <div style={{ fontWeight: 700, marginBottom: 8 }}>Static water level vs GPI</div>
-        <ReactECharts option={optionSwlVsGpi} style={{ height: 280 }} />
-      </div>
+      {results.length < 2 ? null : (
+        <>
+          <div style={{ border: '1px solid #2a3a5a', borderRadius: 12, padding: 10, background: 'rgba(255,255,255,0.04)' }}>
+            <div style={{ fontWeight: 700, marginBottom: 8 }}>Predicted suitability class distribution</div>
+            <ReactECharts option={optionClassBar} style={{ height: 260 }} />
+          </div>
+          <div style={{ border: '1px solid #2a3a5a', borderRadius: 12, padding: 10, background: 'rgba(255,255,255,0.04)' }}>
+            <div style={{ fontWeight: 700, marginBottom: 8 }}>Predicted yield vs GPI</div>
+            <ReactECharts option={optionYieldVsGpi} style={{ height: 280 }} />
+          </div>
+          <div style={{ border: '1px solid #2a3a5a', borderRadius: 12, padding: 10, background: 'rgba(255,255,255,0.04)' }}>
+            <div style={{ fontWeight: 700, marginBottom: 8 }}>Static water level vs GPI</div>
+            <ReactECharts option={optionSwlVsGpi} style={{ height: 280 }} />
+          </div>
+        </>
+      )}
     </div>
   )
 }
-

@@ -1,5 +1,9 @@
 import './App.css'
+<<<<<<< HEAD
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+=======
+import { useEffect, useMemo, useRef, useState } from 'react'
+>>>>>>> 8df1b2c8cf2a746c1fb015514f857605cc5ffc63
 import {
   convertCoordinates,
   fetchReportPdf,
@@ -375,9 +379,12 @@ function App() {
   const [lookingUpPlace, setLookingUpPlace] = useState(false)
   const [manualInteraction, setManualInteraction] = useState(false)
   const hasBeenHiddenRef = useRef(false)
+<<<<<<< HEAD
   const lastActivityAtRef = useRef<number>(Date.now())
   const lastConversionKeyRef = useRef<string | null>(null)
   const suppressConversionRef = useRef(false)
+=======
+>>>>>>> 8df1b2c8cf2a746c1fb015514f857605cc5ffc63
 
   function formatRuntimeError(err: unknown) {
     if (typeof navigator !== 'undefined' && navigator.onLine === false) {
@@ -455,6 +462,7 @@ function App() {
       setAuthBusy(false)
     }
   }
+<<<<<<< HEAD
   
   function resetSelectionState(summary: string) {
     setPlaceName(null)
@@ -467,6 +475,8 @@ function App() {
     setStatus('ready')
   }
 
+=======
+>>>>>>> 8df1b2c8cf2a746c1fb015514f857605cc5ffc63
 
   const logout = useCallback(() => {
     writeAuthToken(null)
@@ -713,9 +723,22 @@ function App() {
     }
   }, [activePoint, manualInteraction, token])
 
+<<<<<<< HEAD
   // Reset the selection state to a clean slate, optionally with a status message. was here 
 
 
+=======
+  function resetSelectionState(summary: string) {
+    setPlaceName(null)
+    setPlaceDetails(null)
+    setResults(null)
+    setPredictionWarnings([])
+    setLocationSummary(summary)
+    setError(null)
+    setConversionError(null)
+    setStatus('ready')
+  }
+>>>>>>> 8df1b2c8cf2a746c1fb015514f857605cc5ffc63
 
   function applyPredictionResponse(resp: PredictResponse, summary: string) {
     suppressConversionRef.current = true
