@@ -379,12 +379,9 @@ function App() {
   const [lookingUpPlace, setLookingUpPlace] = useState(false)
   const [manualInteraction, setManualInteraction] = useState(false)
   const hasBeenHiddenRef = useRef(false)
-<<<<<<< HEAD
   const lastActivityAtRef = useRef<number>(Date.now())
   const lastConversionKeyRef = useRef<string | null>(null)
   const suppressConversionRef = useRef(false)
-=======
->>>>>>> 8df1b2c8cf2a746c1fb015514f857605cc5ffc63
 
   function formatRuntimeError(err: unknown) {
     if (typeof navigator !== 'undefined' && navigator.onLine === false) {
@@ -462,7 +459,6 @@ function App() {
       setAuthBusy(false)
     }
   }
-<<<<<<< HEAD
   
   function resetSelectionState(summary: string) {
     setPlaceName(null)
@@ -475,8 +471,6 @@ function App() {
     setStatus('ready')
   }
 
-=======
->>>>>>> 8df1b2c8cf2a746c1fb015514f857605cc5ffc63
 
   const logout = useCallback(() => {
     writeAuthToken(null)
