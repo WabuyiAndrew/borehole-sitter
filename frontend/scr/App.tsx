@@ -271,21 +271,26 @@ async function saveBlobFile(filename: string, blob: Blob, mimeType: string) {
   const acceptMimeType = mimeType.split(';')[0] || 'text/plain'
 
   if (typeof pickerWindow.showSaveFilePicker === 'function') {
-    const handle = await pickerWindow.showSaveFilePicker({
-      suggestedName: filename,
-      types: [
-        {
-          description: 'Exported file',
-          accept: {
-            [acceptMimeType]: [extension],
+    try {
+      const handle = await pickerWindow.showSaveFilePicker({
+        suggestedName: filename,
+        types: [
+          {
+            description: 'Exported file',
+            accept: {
+              [acceptMimeType]: [extension],
+            },
           },
-        },
-      ],
-    })
-    const writable = await handle.createWritable()
-    await writable.write(blob)
-    await writable.close()
-    return
+        ],
+      })
+      const writable = await handle.createWritable()
+      await writable.write(blob)
+      await writable.close()
+      return
+    } catch (err) {
+      if (err instanceof DOMException && err.name === 'AbortError') return
+      throw err
+    }
   }
 
   const shareData: ShareData = {
@@ -297,8 +302,13 @@ async function saveBlobFile(filename: string, blob: Blob, mimeType: string) {
   }
 
   if (typeof navigator.share === 'function' && typeof shareNavigator.canShare === 'function' && shareNavigator.canShare(shareData)) {
-    await navigator.share(shareData)
-    return
+    try {
+      await navigator.share(shareData)
+      return
+    } catch (err) {
+      if (err instanceof DOMException && err.name === 'AbortError') return
+      throw err
+    }
   }
 
   const href = URL.createObjectURL(blob)
