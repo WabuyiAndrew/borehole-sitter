@@ -1,9 +1,5 @@
 import './App.css'
-<<<<<<< HEAD
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-=======
-import { useEffect, useMemo, useRef, useState } from 'react'
->>>>>>> 8df1b2c8cf2a746c1fb015514f857605cc5ffc63
 import {
   convertCoordinates,
   fetchReportPdf,
