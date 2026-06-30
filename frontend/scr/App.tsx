@@ -375,6 +375,7 @@ function App() {
   const [lookingUpPlace, setLookingUpPlace] = useState(false)
   const [manualInteraction, setManualInteraction] = useState(false)
   const hasBeenHiddenRef = useRef(false)
+  // these lines were just added
   const lastActivityAtRef = useRef<number>(Date.now())
   const lastConversionKeyRef = useRef<string | null>(null)
   const suppressConversionRef = useRef(false)
@@ -713,22 +714,9 @@ function App() {
     }
   }, [activePoint, manualInteraction, token])
 
-<<<<<<< HEAD
   // Reset the selection state to a clean slate, optionally with a status message. was here 
 
 
-=======
-  function resetSelectionState(summary: string) {
-    setPlaceName(null)
-    setPlaceDetails(null)
-    setResults(null)
-    setPredictionWarnings([])
-    setLocationSummary(summary)
-    setError(null)
-    setConversionError(null)
-    setStatus('ready')
-  }
->>>>>>> 8df1b2c8cf2a746c1fb015514f857605cc5ffc63
 
   function applyPredictionResponse(resp: PredictResponse, summary: string) {
     suppressConversionRef.current = true
