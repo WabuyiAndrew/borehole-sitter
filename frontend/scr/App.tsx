@@ -250,15 +250,6 @@ function escapeCsvValue(value: string | number) {
   return text
 }
 
-function formatDistance(distanceMeters: number) {
-  if (!Number.isFinite(distanceMeters)) return 'Unavailable'
-  if (distanceMeters >= 1000) {
-    const rounded = distanceMeters >= 10000 ? 0 : 1
-    return `${(distanceMeters / 1000).toFixed(rounded)} km`
-  }
-  return `${Math.round(distanceMeters)} m`
-}
-
 async function saveTextFile(filename: string, content: string, mimeType: string) {
   const blob = new Blob([content], { type: mimeType })
   await saveBlobFile(filename, blob, mimeType)
@@ -364,7 +355,6 @@ function App() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [results, setResults] = useState<PredictResult[] | null>(null)
-  const [predictionWarnings, setPredictionWarnings] = useState<string[]>([])
   const [status, setStatus] = useState<'ready' | 'warming' | 'connected' | 'error'>('warming')
   const [conversion, setConversion] = useState<ConvertCoordinatesResponse | null>(null)
   const [converting, setConverting] = useState(false)
@@ -442,7 +432,7 @@ function App() {
       if (authMode === 'login') {
         await apiLogin(username, password)
         setToken(readAuthToken())
-        setAuthMessage('Signed in for this app session. You will be asked to log in again the next time the app opens.')
+        setAuthMessage('Signed in.')
         return
       }
       await apiSignup(username, password)
@@ -461,7 +451,6 @@ function App() {
     setPlaceName(null)
     setPlaceDetails(null)
     setResults(null)
-    setPredictionWarnings([])
     setLocationSummary(summary)
     setError(null)
     setConversionError(null)
@@ -510,9 +499,6 @@ function App() {
 
   const decisionClass =
     best?.decision === 'Suitable' ? 'good' : best?.decision === 'Moderate' ? 'warn' : best ? 'bad' : 'muted'
-  const reliabilityLabel = best
-    ? `Nearest calibrated background point: ${formatDistance(best.nearest_background_distance_m)}`
-    : 'Reliability indicators appear after prediction.'
 
   const activePoint = useMemo(() => {
     if (best) {
@@ -721,7 +707,6 @@ function App() {
   function applyPredictionResponse(resp: PredictResponse, summary: string) {
     suppressConversionRef.current = true
     setResults(resp.results)
-    setPredictionWarnings(resp.warnings || [])
     setUtme(String(Math.round(resp.best.utme)))
     setUtmn(String(Math.round(resp.best.utmn)))
     setLatitudeInput(resp.best.latitude.toFixed(5))
@@ -790,6 +775,7 @@ function App() {
 
     try {
       await saveTextFile('drillscout-findings.csv', [header.join(','), ...rows].join('\n'), 'text/csv;charset=utf-8')
+      setLocationSummary('CSV export saved. If prompted, choose a location; otherwise check your Downloads folder.')
     } catch (err) {
       setError(formatRuntimeError(err))
     }
@@ -808,6 +794,7 @@ function App() {
         place_details: placeDetails,
       })
       await saveBlobFile('drillscout-report.pdf', blob, 'application/pdf')
+      setLocationSummary('Report saved. If prompted, choose a location; otherwise check your Downloads folder.')
     } catch (err) {
       setError(formatRuntimeError(err))
     }
@@ -840,13 +827,10 @@ function App() {
 
       applyPredictionResponse(
         resp,
-        coordinateMode === 'latlon'
-          ? 'Backend-converted latitude and longitude were evaluated successfully.'
-          : 'Backend-confirmed UTM coordinates were evaluated successfully.',
+        'Prediction complete.',
       )
     } catch (err) {
       setError(formatRuntimeError(err))
-      setPredictionWarnings([])
       setStatus('error')
     } finally {
       setLoading(false)
@@ -878,17 +862,10 @@ function App() {
       setCoordinateMode('latlon')
       syncInputsFromConversion(converted)
 
-      const accuracy =
-        typeof pos.coords.accuracy === 'number' && Number.isFinite(pos.coords.accuracy)
-          ? `accuracy about ${Math.round(pos.coords.accuracy)} m`
-          : 'device GPS reading available'
-      setLocationSummary(`Detected your current position with ${accuracy}.`)
-
       const resp = await predict({ source: 'geolocation', point_geo: { longitude, latitude } })
-      applyPredictionResponse(resp, `Detected your position with ${accuracy}. The map marker moved to your location.`)
+      applyPredictionResponse(resp, 'Prediction complete.')
     } catch (err) {
       setError(formatRuntimeError(err))
-      setPredictionWarnings([])
       setStatus('error')
     } finally {
       setLoading(false)
@@ -906,10 +883,9 @@ function App() {
       }
       const resp = await predict({ source: 'manual', points_utm: points })
       setConversion(null)
-      applyPredictionResponse(resp, `Batch analysis completed for ${resp.results.length} points. The map centers on the best-ranked candidate.`)
+      applyPredictionResponse(resp, `Batch analysis completed for ${resp.results.length} points.`)
     } catch (err) {
       setError(formatRuntimeError(err))
-      setPredictionWarnings([])
       setStatus('error')
     } finally {
       setLoading(false)
@@ -927,7 +903,7 @@ function App() {
     setPlaceName(null)
     setPlaceDetails(null)
     setResults(null)
-    setLocationSummary('Map selection updated. Run prediction to evaluate this point.')
+    setLocationSummary('Point selected. Tap Predict suitability.')
     setError(null)
     setConversionError(null)
     setStatus('ready')
@@ -1067,8 +1043,13 @@ function App() {
               : 'Enter UTME and UTMN.'}
           </p>
           <p className="hint">Tap the map to pick a point.</p>
-          <p className="hint">{locationSummary || conversionHint || (converting ? 'Resolving coordinates…' : 'Choose a point to begin.')}</p>
-          <p className="hint">{reliabilityLabel}</p>
+          <p className="hint">{locationSummary || (converting ? 'Resolving coordinates…' : 'Choose a point to begin.')}</p>
+          {conversionHint ? (
+            <details className="details">
+              <summary>Technical details</summary>
+              <p className="hint">{conversionHint}</p>
+            </details>
+          ) : null}
 
           <details className="details">
             <summary>Batch mode, charts, and exports</summary>
@@ -1119,10 +1100,6 @@ function App() {
                       <div className="metricLabel">SWL</div>
                       <div className="metricValue">{best.predicted_static_water_level_m.toFixed(2)} m</div>
                     </div>
-                    <div className="metricCard">
-                      <div className="metricLabel">Nearest reference</div>
-                      <div className="metricValue">{formatDistance(best.nearest_background_distance_m)}</div>
-                    </div>
                   </div>
                   <div className="muted">
                     Coordinates: {best.latitude.toFixed(5)}, {best.longitude.toFixed(5)} · Model UTME <b>{best.utme.toFixed(0)}</b> · Model UTMN{' '}
@@ -1135,7 +1112,6 @@ function App() {
                       <b>{conversion.authoritative.utmn.toFixed(0)}</b>
                     </div>
                   ) : null}
-                  {predictionWarnings.length ? <div className="warningPanel">{predictionWarnings.join(' ')}</div> : null}
                   <div className="muted">{best.recommendation}</div>
                 </div>
                 <div className="buttons compact">
