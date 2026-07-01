@@ -187,21 +187,7 @@ def _require_runtime() -> AwojaModelRuntime:
 
 
 def _build_prediction_warnings(results: List[Dict[str, Any]]) -> List[str]:
-    if not results:
-        return []
-
-    far_reference_threshold_m = 2000.0
-    far_reference_points = [
-        result for result in results if float(result.get("nearest_background_distance_m", 0.0)) >= far_reference_threshold_m
-    ]
-
-    warnings: List[str] = []
-    if far_reference_points:
-        warnings.append(
-            "Some selected locations are far from the nearest calibrated background reference. "
-            "Use the nearest reference distance shown in the app to judge prediction confidence."
-        )
-    return warnings
+    return []
 
 
 @app.on_event("startup")
