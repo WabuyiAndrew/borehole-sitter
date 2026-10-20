@@ -1,3 +1,4 @@
+
 name: Build BoreHole Sitter release packages
 
 on:
@@ -10,16 +11,20 @@ jobs:
   build-android-apk:
     name: Build Android APK
     runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
-      - uses: actions/setup-java@v4
+      - name: Setup Java
+        uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: 21
@@ -27,14 +32,21 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
         with:
-          packages: |
-            platform-tools
-            platforms;android-35
-            build-tools;35.0.0
+          packages: ''
 
       - name: Accept Android SDK licenses
         shell: bash
-        run: yes | sdkmanager --licenses
+        run: |
+          set -o pipefail
+          yes | sdkmanager --licenses
+
+      - name: Install Android SDK packages
+        shell: bash
+        run: |
+          sdkmanager \
+            "platform-tools" \
+            "platforms;android-35" \
+            "build-tools;35.0.0"
 
       - name: Install frontend dependencies
         working-directory: frontend
@@ -51,7 +63,7 @@ jobs:
         working-directory: frontend
         run: npx cap sync android
 
-      - name: Make gradlew executable
+      - name: Make Gradle executable
         working-directory: frontend/android
         run: chmod +x ./gradlew
 
@@ -59,7 +71,7 @@ jobs:
         working-directory: frontend/android
         run: ./gradlew assembleDebug
 
-      - name: Upload APK artifact
+      - name: Upload Android APK
         uses: actions/upload-artifact@v4
         with:
           name: BoreHole-Sitter-android-apk-debug
@@ -70,21 +82,20 @@ jobs:
   build-windows-tauri:
     name: Build Windows EXE/Installer
     runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: 21
-
-      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - name: Install Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
 
       - name: Install frontend dependencies
         working-directory: frontend
@@ -101,10 +112,12 @@ jobs:
         working-directory: frontend
         run: npm run tauri:build
 
-      - name: Upload Windows bundle artifact
+      - name: Upload Windows installer artifacts
         uses: actions/upload-artifact@v4
         with:
           name: BoreHole-Sitter-windows-tauri-bundle
-          path: frontend/src-tauri/target/release/bundle/**
+          path: |
+            frontend/src-tauri/target/release/bundle/**/*.exe
+            frontend/src-tauri/target/release/bundle/**/*.msi
           if-no-files-found: error
           retention-days: 30
