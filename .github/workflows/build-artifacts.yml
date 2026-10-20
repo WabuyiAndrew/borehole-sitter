@@ -37,8 +37,9 @@ jobs:
       - name: Accept Android SDK licenses
         shell: bash
         run: |
-          set -o pipefail
+          set +o pipefail
           yes | sdkmanager --licenses
+          sdkmanager --licenses < /dev/null
 
       - name: Install Android SDK packages
         shell: bash
@@ -112,7 +113,7 @@ jobs:
         working-directory: frontend
         run: npm run tauri:build
 
-      - name: Upload Windows installer artifacts
+      - name: Upload Windows installers
         uses: actions/upload-artifact@v4
         with:
           name: BoreHole-Sitter-windows-tauri-bundle
