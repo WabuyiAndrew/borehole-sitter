@@ -24,19 +24,13 @@ jobs:
       
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
-        with:
-          packages: |
-            platform-tools
-            platforms;android-35
-            build-tools;35.0.0
+
+      - name: Install Android SDK packages
+        run: |
+          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
 
       - name: Accept Android SDK licenses
-        shell: bash
-        run: |
-          yes | sdkmanager --licenses || true
-            - name: Install frontend dependencies
-              working-directory: frontend
-              run: npm ci
+        run: yes | sdkmanager --licenses || true
       
       - name: Build web app
         working-directory: frontend
